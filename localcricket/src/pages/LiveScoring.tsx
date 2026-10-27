@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   RotateCcw, ArrowLeftRight, ChevronLeft, MoreVertical,
-  FileText, AlertCircle, RefreshCw
+  FileText, AlertCircle, RefreshCw, UserMinus
 } from 'lucide-react';
 import { useMatch } from '../hooks/useMatch';
 import { Button, Card, SaveStatus } from '../components/common/index';
@@ -12,6 +12,7 @@ import RunOutDialog from '../components/scoring/RunOutDialog';
 import ExtrasDialog from '../components/scoring/ExtrasDialog';
 import ChangeBowlerDialog from '../components/scoring/ChangeBowlerDialog';
 import NewBatterDialog from '../components/scoring/NewBatterDialog';
+import RetiredHurtDialog from '../components/scoring/RetiredHurtDialog';
 import type { DismissalInfo, InningsState } from '../domain/types';
 
 export default function LiveScoring() {
@@ -22,6 +23,7 @@ export default function LiveScoring() {
   const [showExtras, setShowExtras] = useState(false);
   const [showBowlerChange, setShowBowlerChange] = useState(false);
   const [showNewBatter, setShowNewBatter] = useState(false);
+  const [showRetiredHurt, setShowRetiredHurt] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [pendingDismissal, setPendingDismissal] = useState<Partial<DismissalInfo> | null>(null);
   const [showInningsBreak, setShowInningsBreak] = useState(false);
@@ -94,8 +96,23 @@ export default function LiveScoring() {
   const nonStrikerStats = innings.batterStats[innings.currentNonStrikerId];
   const bowlerStats = innings.bowlerStats[innings.currentBowlerId];
 
+  // Current over deliveries
+  const currentOverNumber = Math.floor(legalBalls / 6);
+  const currentOverDeliveries = innings.deliveries.filter(d => d.overNumber === currentOverNumber);
+
+  // Check if an over just completed and bowler for next over must be chosen
+  const lastOverDeliveries = innings.deliveries.filter(d => d.overNumber === currentOverNumber - 1);
+  const lastOverBowlerId = lastOverDeliveries.length > 0 ? lastOverDeliveries[lastOverDeliveries.length - 1].bowlerId : null;
+  const isStartOfNewOver = legalBalls > 0 &&
+    currentOverDeliveries.length === 0 &&
+    innings.status === 'active' &&
+    !isAllOut &&
+    bowlingTeam.players.length > 1 &&
+    lastOverBowlerId === innings.currentBowlerId;
+
   function handleRun(runs: number, isBoundary = false) {
     if (needsNewBatter) { setShowNewBatter(true); return; }
+    if (isStartOfNewOver) { setShowBowlerChange(true); return; }
     dispatch({ type: 'NORMAL_DELIVERY', runs, isBoundary, boundaryType: runs === 4 ? 4 : runs === 6 ? 6 : undefined });
   }
 
@@ -125,10 +142,6 @@ export default function LiveScoring() {
     setShowInningsBreak(false);
     dispatch({ type: 'START_NEXT_INNINGS', strikerId, nonStrikerId, bowlerId });
   }
-
-  // Current over deliveries
-  const currentOverNumber = Math.floor(legalBalls / 6);
-  const currentOverDeliveries = innings.deliveries.filter(d => d.overNumber === currentOverNumber);
 
   return (
     <div className="min-h-screen bg-[#F5F9FF] flex flex-col pb-8">
@@ -255,24 +268,45 @@ export default function LiveScoring() {
 
         {/* Bowler */}
         <Card className="px-4 py-3">
-          <div className="grid grid-cols-6 gap-1 items-center">
-            <div className="col-span-2">
-              <p className="text-[10px] font-bold text-[#60758A] uppercase tracking-wider mb-0.5">Bowler</p>
+          <div className="flex items-center justify-between mb-2 pb-2 border-b border-[#DCE7F5]">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-bold text-[#60758A] uppercase tracking-wider mb-0.5">Current Bowler</p>
               <p className="text-sm font-bold text-[#172B4D] truncate">{bowler?.name ?? '—'}</p>
             </div>
+            {config.format.maxOversPerBowler > 0 && (
+              <span className="text-xs bg-[#E3F2FD] text-[#1565C0] font-semibold px-2 py-0.5 rounded-full">
+                Quota: {Math.max(0, config.format.maxOversPerBowler - Math.floor((bowlerStats?.legalBalls ?? 0) / 6))} ov left
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-center">
             {[
               { label: 'O', value: legalBallsToOverString(bowlerStats?.legalBalls ?? 0) },
               { label: 'M', value: String(bowlerStats?.maidens ?? 0) },
               { label: 'R', value: String(bowlerStats?.runs ?? 0) },
               { label: 'W', value: String(bowlerStats?.wickets ?? 0) },
+              { label: 'ECON', value: (bowlerStats?.economy ?? 0).toFixed(2) },
             ].map(({ label, value }) => (
-              <div key={label} className="text-center">
+              <div key={label}>
                 <p className="text-[10px] font-bold text-[#60758A] uppercase">{label}</p>
-                <p className="text-sm font-bold tabular-nums">{value}</p>
+                <p className="text-sm font-bold tabular-nums text-[#172B4D]">{value}</p>
               </div>
             ))}
           </div>
         </Card>
+
+        {/* Over Complete Banner */}
+        {isStartOfNewOver && (
+          <div className="bg-[#E3F2FD] border-2 border-[#1565C0] rounded-xl p-3.5 flex items-center justify-between shadow-sm animate-pulse">
+            <div>
+              <p className="text-xs font-bold text-[#1565C0] uppercase tracking-wider">Over Complete</p>
+              <p className="text-sm font-bold text-[#172B4D]">Select bowler for Over {currentOverNumber + 1}</p>
+            </div>
+            <Button variant="primary" size="sm" onClick={() => setShowBowlerChange(true)}>
+              Choose Bowler
+            </Button>
+          </div>
+        )}
 
         {/* Scoring keypad */}
         <div className="space-y-2">
@@ -328,7 +362,11 @@ export default function LiveScoring() {
         <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={() => setShowWicket(true)}
+            onClick={() => {
+              if (needsNewBatter) { setShowNewBatter(true); return; }
+              if (isStartOfNewOver) { setShowBowlerChange(true); return; }
+              setShowWicket(true);
+            }}
             className="flex flex-col items-center justify-center gap-1 py-3 rounded-xl bg-[#D32F2F] text-white
               hover:bg-[#B71C1C] active:bg-[#B71C1C] transition-colors min-h-[60px]
               font-bold text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
@@ -339,7 +377,11 @@ export default function LiveScoring() {
           </button>
           <button
             type="button"
-            onClick={() => setShowExtras(true)}
+            onClick={() => {
+              if (needsNewBatter) { setShowNewBatter(true); return; }
+              if (isStartOfNewOver) { setShowBowlerChange(true); return; }
+              setShowExtras(true);
+            }}
             className="flex flex-col items-center justify-center gap-1 py-3 rounded-xl bg-amber-500 text-white
               hover:bg-amber-600 active:bg-amber-700 transition-colors min-h-[60px]
               font-bold text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
@@ -433,6 +475,17 @@ export default function LiveScoring() {
         battingTeam={battingTeam}
       />
 
+      <RetiredHurtDialog
+        isOpen={showRetiredHurt}
+        onClose={() => setShowRetiredHurt(false)}
+        onConfirm={(batterId, replacementId) => {
+          setShowRetiredHurt(false);
+          dispatch({ type: 'RETIRED_HURT', batterId, replacementId });
+        }}
+        innings={innings}
+        battingTeam={battingTeam}
+      />
+
       {/* Innings Break Modal */}
       {showInningsBreak && state.innings[0] && (
         <InningsBreakModal
@@ -472,6 +525,7 @@ export default function LiveScoring() {
               {[
                 { label: 'View Scorecard', icon: FileText, action: () => { setShowMore(false); navigate(`/scorecard/${config.id}`); } },
                 { label: 'Swap Batters End', icon: ArrowLeftRight, action: () => { setShowMore(false); dispatch({ type: 'SWAP_BATTERS' }); } },
+                { label: 'Batter Retired Hurt', icon: UserMinus, action: () => { setShowMore(false); setShowRetiredHurt(true); } },
                 { label: 'End Innings Manually', icon: AlertCircle, action: () => { setShowMore(false); dispatch({ type: 'END_INNINGS' }); }, danger: true },
               ].map(({ label, icon: Icon, action, danger }) => (
                 <button

@@ -15,8 +15,12 @@ const navItems = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  // Hide bottom nav during active scoring
-  const hideNav = location.pathname.startsWith('/scoring') || location.pathname.startsWith('/setup');
+  // Hide bottom nav and sidebar during active match, setup, scorecard, and analysis views
+  const hideNav =
+    location.pathname.startsWith('/scoring') ||
+    location.pathname.startsWith('/setup') ||
+    location.pathname.startsWith('/scorecard') ||
+    location.pathname.startsWith('/analysis');
 
   return (
     <div className="min-h-screen bg-[#F5F9FF] flex flex-col">

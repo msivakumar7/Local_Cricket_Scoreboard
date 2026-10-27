@@ -2,16 +2,18 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Download, TrendingUp } from 'lucide-react';
 import { matchRepository } from '../db/repository';
-import type { MatchState, InningsState, BatterStats, BowlerStats } from '../domain/types';
+import type { MatchState, InningsState, BatterStats, BowlerStats, DeliveryEvent } from '../domain/types';
 import { legalBallsToOverString, calculateCRR } from '../domain/rules';
+import { recalculateInnings } from '../domain/engine';
 import { Button, Card, TabStrip, Badge } from '../components/common/index';
 import { generateMatchPDF } from '../services/pdfService';
 import { useMatch } from '../hooks/useMatch';
+import EditDeliveryDialog from '../components/scorecard/EditDeliveryDialog';
 
 export default function Scorecard() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const { state: liveState } = useMatch();
+  const { state: liveState, dispatch } = useMatch();
   const [state, setState] = useState<MatchState | null>(null);
   const [activeInnings, setActiveInnings] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -29,6 +31,40 @@ export default function Scorecard() {
       setLoading(false);
     }
   }, [id, liveState]);
+
+  async function handleEditDelivery(deliveryId: string, updated: Partial<DeliveryEvent>) {
+    if (!state) return;
+    if (liveState && liveState.config.id === state.config.id) {
+      dispatch({ type: 'EDIT_DELIVERY', deliveryId, updatedDelivery: updated });
+    } else {
+      const inningsToUpdate = state.innings[activeInnings];
+      const deliveryIndex = inningsToUpdate.deliveries.findIndex(d => d.id === deliveryId);
+      if (deliveryIndex === -1) return;
+
+      const updatedDeliveries = [...inningsToUpdate.deliveries];
+      updatedDeliveries[deliveryIndex] = {
+        ...updatedDeliveries[deliveryIndex],
+        ...updated,
+      };
+
+      const updatedInnings = recalculateInnings(
+        { ...inningsToUpdate, deliveries: updatedDeliveries },
+        state.config
+      );
+
+      const newInningsList = state.innings.map((inn, idx) =>
+        idx === activeInnings ? updatedInnings : inn
+      );
+
+      const updatedState: MatchState = {
+        ...state,
+        innings: newInningsList,
+      };
+
+      await matchRepository.save(updatedState);
+      setState(updatedState);
+    }
+  }
 
   if (loading) return <div className="min-h-screen bg-[#F5F9FF] flex items-center justify-center"><p className="text-[#60758A]">Loading scorecard…</p></div>;
   if (!state) return (
@@ -128,6 +164,7 @@ export default function Scorecard() {
             config={config}
             getTeamName={getTeamName}
             getPlayerName={getPlayerName}
+            onEditDelivery={handleEditDelivery}
           />
         )}
 
@@ -142,12 +179,13 @@ export default function Scorecard() {
 }
 
 function InningsScorecard({
-  innings, config, getTeamName, getPlayerName,
+  innings, config, getTeamName, getPlayerName, onEditDelivery,
 }: {
   innings: InningsState;
   config: any;
   getTeamName: (id: string) => string;
   getPlayerName: (teamId: string, playerId: string) => string;
+  onEditDelivery: (deliveryId: string, updated: Partial<DeliveryEvent>) => void;
 }) {
   const crr = calculateCRR(innings.totalRuns, innings.legalBalls);
 
@@ -246,7 +284,7 @@ function InningsScorecard({
           <div className="flex items-center justify-between text-xs text-[#60758A]">
             <span>
               Extras: <strong className="text-[#172B4D]">{innings.extras.total}</strong>
-              {' '}(W {innings.extras.wides}, NB {innings.extras.noBalls}, B {innings.extras.byes}, LB {innings.extras.legByes})
+              {' '}(W {innings.extras.wides}, NB {innings.extras.noBalls}, B {innings.extras.byes}, LB {innings.extras.legByes}{innings.extras.penalties ? `, P ${innings.extras.penalties}` : ''})
             </span>
           </div>
         </div>
@@ -338,12 +376,29 @@ function InningsScorecard({
       </Card>
 
       {/* Over by over summary */}
-      <OverByOverView innings={innings} getBowlerName={getBowlerName} />
+      <OverByOverView
+        innings={innings}
+        config={config}
+        getBowlerName={getBowlerName}
+        onEditDelivery={onEditDelivery}
+      />
     </div>
   );
 }
 
-function OverByOverView({ innings, getBowlerName }: { innings: InningsState; getBowlerName: (id: string) => string }) {
+function OverByOverView({
+  innings,
+  config,
+  getBowlerName,
+  onEditDelivery,
+}: {
+  innings: InningsState;
+  config: any;
+  getBowlerName: (id: string) => string;
+  onEditDelivery: (deliveryId: string, updated: Partial<DeliveryEvent>) => void;
+}) {
+  const [editingDelivery, setEditingDelivery] = useState<DeliveryEvent | null>(null);
+
   const maxOver = Math.floor(innings.legalBalls / 6);
   const hasCurrentOver = innings.legalBalls % 6 > 0;
   const totalOvers = maxOver + (hasCurrentOver ? 1 : 0);
@@ -359,40 +414,58 @@ function OverByOverView({ innings, getBowlerName }: { innings: InningsState; get
   });
 
   return (
-    <Card className="overflow-hidden">
-      <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5]">
-        <p className="text-xs font-extrabold text-[#60758A] uppercase tracking-widest">Over by Over</p>
-      </div>
-      <div className="divide-y divide-[#DCE7F5]">
-        {overData.map(({ over, deliveries, runs, wickets, bowlerId }) => (
-          <div key={over} className="px-4 py-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-bold text-[#172B4D]">Over {over + 1}</span>
-              <span className="text-xs text-[#60758A]">{getBowlerName(bowlerId)}</span>
-              <span className="text-sm font-semibold text-[#60758A]">
-                {runs} run{runs !== 1 ? 's' : ''}{wickets > 0 ? ` · ${wickets}W` : ''}
-              </span>
+    <>
+      <Card className="overflow-hidden">
+        <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5] flex items-center justify-between">
+          <p className="text-xs font-extrabold text-[#60758A] uppercase tracking-widest">Over by Over</p>
+          <span className="text-[10px] text-[#1565C0] font-semibold">Tap any ball to edit</span>
+        </div>
+        <div className="divide-y divide-[#DCE7F5]">
+          {overData.map(({ over, deliveries, runs, wickets, bowlerId }) => (
+            <div key={over} className="px-4 py-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-bold text-[#172B4D]">Over {over + 1}</span>
+                <span className="text-xs text-[#60758A]">{getBowlerName(bowlerId)}</span>
+                <span className="text-sm font-semibold text-[#60758A]">
+                  {runs} run{runs !== 1 ? 's' : ''}{wickets > 0 ? ` · ${wickets}W` : ''}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {deliveries.map((d, i) => {
+                  let label = String(d.totalRuns);
+                  let cls = 'bg-white text-[#172B4D] border border-[#DCE7F5]';
+                  if (d.dismissal) { label = 'W'; cls = 'bg-[#D32F2F] text-white'; }
+                  else if (d.deliveryType === 'wide') { label = `Wd`; cls = 'bg-amber-100 text-amber-800 text-[10px]'; }
+                  else if (d.deliveryType === 'no_ball') { label = 'NB'; cls = 'bg-orange-100 text-orange-800 text-[10px]'; }
+                  else if (d.batterRuns === 4) { label = '4'; cls = 'bg-[#EBF7EE] text-[#16803C] border border-[#16803C] font-extrabold'; }
+                  else if (d.batterRuns === 6) { label = '6'; cls = 'bg-[#16803C] text-white font-extrabold'; }
+                  else if (d.totalRuns === 0) { label = '·'; cls = 'bg-[#E3F2FD] text-[#60758A]'; }
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setEditingDelivery(d)}
+                      title="Tap to edit this delivery"
+                      className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold transition-transform hover:scale-110 cursor-pointer shadow-xs ${cls}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {deliveries.map((d, i) => {
-                let label = String(d.totalRuns);
-                let cls = 'bg-white text-[#172B4D] border border-[#DCE7F5]';
-                if (d.dismissal) { label = 'W'; cls = 'bg-[#D32F2F] text-white'; }
-                else if (d.deliveryType === 'wide') { label = `Wd`; cls = 'bg-amber-100 text-amber-800 text-[10px]'; }
-                else if (d.deliveryType === 'no_ball') { label = 'NB'; cls = 'bg-orange-100 text-orange-800 text-[10px]'; }
-                else if (d.batterRuns === 4) { label = '4'; cls = 'bg-[#EBF7EE] text-[#16803C] border border-[#16803C] font-extrabold'; }
-                else if (d.batterRuns === 6) { label = '6'; cls = 'bg-[#16803C] text-white font-extrabold'; }
-                else if (d.totalRuns === 0) { label = '·'; cls = 'bg-[#E3F2FD] text-[#60758A]'; }
-                return (
-                  <span key={i} className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${cls}`}>
-                    {label}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
+          ))}
+        </div>
+      </Card>
+
+      <EditDeliveryDialog
+        isOpen={editingDelivery !== null}
+        onClose={() => setEditingDelivery(null)}
+        delivery={editingDelivery}
+        config={config}
+        innings={innings}
+        onSave={(deliveryId, updated) => onEditDelivery(deliveryId, updated)}
+      />
+    </>
   );
 }

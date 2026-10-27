@@ -11,7 +11,7 @@ interface Props {
   bowlingTeam: Team;
 }
 
-type ExtrasTab = 'wide' | 'no_ball' | 'bye' | 'leg_bye';
+type ExtrasTab = 'wide' | 'no_ball' | 'bye' | 'leg_bye' | 'penalty';
 
 export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
   const [tab, setTab] = useState<ExtrasTab>('wide');
@@ -20,6 +20,7 @@ export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
   const [noBallExtraType, setNoBallExtraType] = useState<'none' | 'bye' | 'leg_bye'>('none');
   const [noBallExtraRuns, setNoBallExtraRuns] = useState(0);
   const [byeRuns, setByeRuns] = useState(1);
+  const [penaltyRuns, setPenaltyRuns] = useState(5);
 
   function reset() {
     setAdditionalRuns(0);
@@ -27,6 +28,7 @@ export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
     setNoBallExtraType('none');
     setNoBallExtraRuns(0);
     setByeRuns(1);
+    setPenaltyRuns(5);
   }
 
   function handleConfirm() {
@@ -42,8 +44,10 @@ export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
       };
     } else if (tab === 'bye') {
       action = { type: 'BYE', runs: byeRuns };
-    } else {
+    } else if (tab === 'leg_bye') {
       action = { type: 'LEG_BYE', runs: byeRuns };
+    } else {
+      action = { type: 'PENALTY', runs: penaltyRuns };
     }
     onConfirm(action);
     reset();
@@ -54,6 +58,7 @@ export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
     { id: 'no_ball', label: 'No-ball' },
     { id: 'bye', label: 'Bye' },
     { id: 'leg_bye', label: 'Leg Bye' },
+    { id: 'penalty', label: 'Penalty' },
   ];
 
   return (
@@ -178,6 +183,32 @@ export default function ExtrasDialog({ isOpen, onClose, onConfirm }: Props) {
           </div>
           <p className="text-xs text-[#60758A] mt-3 text-center">
             {tab === 'bye' ? 'Byes' : 'Leg byes'} count as legal deliveries. Not credited to batter or bowler's runs.
+          </p>
+        </div>
+      )}
+
+      {/* Penalty Runs */}
+      {tab === 'penalty' && (
+        <div>
+          <p className="text-sm text-[#60758A] mb-3">
+            Penalty runs awarded to batting side (e.g. ball hitting fielding helmet, unfair play). Does not consume a legal ball.
+          </p>
+          <label className="text-sm font-bold text-[#172B4D] block mb-2">Penalty Runs</label>
+          <div className="grid grid-cols-4 gap-2 mb-3">
+            {[1, 2, 5, 10].map(r => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setPenaltyRuns(r)}
+                className={`py-3 rounded-xl border-2 text-xl font-extrabold transition-colors min-h-[56px]
+                  ${penaltyRuns === r ? 'border-[#1565C0] bg-[#E3F2FD] text-[#1565C0]' : 'border-[#DCE7F5] bg-white hover:border-[#1565C0]'}`}
+              >
+                +{r}
+              </button>
+            ))}
+          </div>
+          <p className="text-center text-sm font-bold text-[#172B4D]">
+            Awarding {penaltyRuns} penalty runs to batting side
           </p>
         </div>
       )}

@@ -214,10 +214,12 @@ export type ScoringAction =
   | { type: 'NO_BALL'; batterRuns?: number; extraType?: 'bye' | 'leg_bye'; extraRuns?: number; dismissal?: DismissalInfo }
   | { type: 'BYE'; runs: number }
   | { type: 'LEG_BYE'; runs: number }
+  | { type: 'PENALTY'; runs: number }
   | { type: 'WICKET'; dismissal: DismissalInfo; runs?: number }
   | { type: 'RETIRED_HURT'; batterId: string; replacementId: string }
   | { type: 'CHANGE_BOWLER'; bowlerId: string }
   | { type: 'SWAP_BATTERS' }
+  | { type: 'EDIT_DELIVERY'; deliveryId: string; updatedDelivery: Partial<DeliveryEvent> }
   | { type: 'UNDO' }
   | { type: 'END_INNINGS' }
   | { type: 'START_NEXT_INNINGS'; strikerId: string; nonStrikerId: string; bowlerId: string }

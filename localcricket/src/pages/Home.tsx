@@ -190,7 +190,17 @@ export default function Home() {
         ) : (
           <div className="space-y-3">
             {recentMatches.map(m => (
-              <Card key={m.id} className="p-4">
+              <Card
+                key={m.id}
+                className="p-4 cursor-pointer hover:border-[#1565C0] transition-colors"
+                onClick={() => {
+                  if (m.status === 'live' || m.status === 'innings_break') {
+                    handleResume(m.id);
+                  } else {
+                    navigate(`/scorecard/${m.id}`);
+                  }
+                }}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -208,7 +218,7 @@ export default function Home() {
                     )}
                   </div>
                   {/* Actions */}
-                  <div className="flex flex-col gap-1 flex-shrink-0">
+                  <div className="flex flex-col gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                     {(m.status === 'live' || m.status === 'innings_break') && (
                       <button
                         onClick={() => handleResume(m.id)}

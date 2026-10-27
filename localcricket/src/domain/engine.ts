@@ -19,6 +19,11 @@ import {
 // Initialisation
 // ============================================================
 
+export function getPlayerNameById(config: MatchConfig, id: string): string {
+  const p = config.teamA.players.find(pl => pl.id === id) || config.teamB.players.find(pl => pl.id === id);
+  return p?.name || id;
+}
+
 export function createInitialMatchState(
   config: MatchConfig,
   openingStrikerId: string,
@@ -35,7 +40,7 @@ export function createInitialMatchState(
 
   const inningsId = uuidv4();
   const innings1 = createInnings(config.id, inningsId, 1, battingTeamId, bowlingTeamId,
-    openingStrikerId, openingNonStrikerId, openingBowlerId);
+    openingStrikerId, openingNonStrikerId, openingBowlerId, config);
 
   return {
     config,
@@ -55,6 +60,7 @@ function createInnings(
   strikerId: string,
   nonStrikerId: string,
   bowlerId: string,
+  config?: MatchConfig,
   target?: number,
 ): InningsState {
   const innings: InningsState = {
@@ -80,9 +86,12 @@ function createInnings(
     status: 'active',
     target,
   };
-  innings.batterStats[strikerId] = makeBatterStats(strikerId, '', 1, innings.id);
-  innings.batterStats[nonStrikerId] = makeBatterStats(nonStrikerId, '', 2, innings.id);
-  innings.bowlerStats[bowlerId] = makeBowlerStats(bowlerId, '', innings.id);
+  const strikerName = config ? getPlayerNameById(config, strikerId) : '';
+  const nonStrikerName = config ? getPlayerNameById(config, nonStrikerId) : '';
+  const bowlerName = config ? getPlayerNameById(config, bowlerId) : '';
+  innings.batterStats[strikerId] = makeBatterStats(strikerId, strikerName, 1, innings.id);
+  innings.batterStats[nonStrikerId] = makeBatterStats(nonStrikerId, nonStrikerName, 2, innings.id);
+  innings.bowlerStats[bowlerId] = makeBowlerStats(bowlerId, bowlerName, innings.id);
   // Opening partnership
   innings.partnerships.push({
     batterAId: strikerId, batterBId: nonStrikerId,
@@ -137,6 +146,8 @@ export function applyAction(state: MatchState, action: ScoringAction): MatchStat
       return applyBye(stateWithSnapshot, action.runs);
     case 'LEG_BYE':
       return applyLegBye(stateWithSnapshot, action.runs);
+    case 'PENALTY':
+      return applyPenalty(stateWithSnapshot, action.runs);
     case 'WICKET':
       return applyWicket(stateWithSnapshot, action.dismissal, action.runs ?? 0);
     case 'CHANGE_BOWLER':
@@ -150,6 +161,8 @@ export function applyAction(state: MatchState, action: ScoringAction): MatchStat
     case 'START_NEXT_INNINGS':
       return applyStartNextInnings(stateWithSnapshot,
         action.strikerId, action.nonStrikerId, action.bowlerId);
+    case 'EDIT_DELIVERY':
+      return applyEditDelivery(stateWithSnapshot, action.deliveryId, action.updatedDelivery);
     default:
       return stateWithSnapshot;
   }
@@ -219,12 +232,7 @@ function applyNormalDelivery(
   }
 
   // Check innings end
-  const maxLegal = config.format.oversPerInnings * 6;
-  if (i.legalBalls >= maxLegal) {
-    return applyEndInnings({ ...state, innings: replaceInnings(state, i) }, 'overs_complete');
-  }
-
-  return { ...state, innings: replaceInnings(state, i) };
+  return checkAutoEndInnings(state, i);
 }
 
 function applyWide(
@@ -264,12 +272,7 @@ function applyWide(
 
   // Handle dismissal on wide (run-out only)
   if (dismissal) {
-    i = processWicket(i, dismissal, 0, state.config);
-    // Don't change legalBalls - wide is illegal delivery
-    // After run-out on wide: rotate strike based on completed runs if any
-    if (additionalRuns % 2 !== 0) {
-      [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
-    }
+    i = processWicket(i, dismissal, 0, state.config, false);
   } else {
     // Strike rotation on wide only if runs completed (batters crossed)
     if (additionalRuns % 2 !== 0) {
@@ -277,11 +280,7 @@ function applyWide(
     }
   }
 
-  const ns = { ...state, innings: replaceInnings(state, i) };
-  if (dismissal && isAllOut(i, state.config)) {
-    return applyEndInnings(ns, 'all_out');
-  }
-  return ns;
+  return checkAutoEndInnings(state, i);
 }
 
 function applyNoBall(
@@ -318,7 +317,7 @@ function applyNoBall(
 
   // Credit batter runs
   if (batterRuns > 0) {
-    ensureBatterStats(i, i.currentStrikerId);
+    ensureBatterStats(i, i.currentStrikerId, state.config);
     i.batterStats[i.currentStrikerId].runs += batterRuns;
     i.batterStats[i.currentStrikerId].balls += 1; // batter still faces the ball
     i.batterStats[i.currentStrikerId].didBat = true;
@@ -328,7 +327,7 @@ function applyNoBall(
       calculateSR(i.batterStats[i.currentStrikerId].runs, i.batterStats[i.currentStrikerId].balls);
   } else {
     // No-ball: batter faces ball but scores 0 — still increment balls
-    ensureBatterStats(i, i.currentStrikerId);
+    ensureBatterStats(i, i.currentStrikerId, state.config);
     i.batterStats[i.currentStrikerId].balls += 1;
     i.batterStats[i.currentStrikerId].didBat = true;
     i.batterStats[i.currentStrikerId].strikeRate =
@@ -339,7 +338,7 @@ function applyNoBall(
   updatePartnership(i, totalRuns, false);
 
   // Bowler charged (penalty + bat runs, not byes/leg-byes)
-  ensureBowlerStats(i, i.currentBowlerId);
+  ensureBowlerStats(i, i.currentBowlerId, state.config);
   i.bowlerStats[i.currentBowlerId].noBalls += 1;
   i.bowlerStats[i.currentBowlerId].runs += noBallPenalty + batterRuns;
   i.bowlerStats[i.currentBowlerId].economy =
@@ -347,20 +346,16 @@ function applyNoBall(
 
   // Dismissal on no-ball (run-out valid)
   if (dismissal) {
-    i = processWicket(i, dismissal, 0, state.config);
+    i = processWicket(i, dismissal, 0, state.config, false);
+  } else {
+    // Strike rotation based on total bat+extra runs when no dismissal
+    const runsForRotation = batterRuns + extraRuns;
+    if (runsForRotation % 2 !== 0) {
+      [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
+    }
   }
 
-  // Strike rotation based on total bat+extra runs
-  const runsForRotation = batterRuns + extraRuns;
-  if (runsForRotation % 2 !== 0) {
-    [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
-  }
-
-  const ns = { ...state, innings: replaceInnings(state, i) };
-  if (dismissal && isAllOut(i, state.config)) {
-    return applyEndInnings(ns, 'all_out');
-  }
-  return ns;
+  return checkAutoEndInnings(state, i);
 }
 
 function applyBye(state: MatchState, runs: number): MatchState {
@@ -405,10 +400,7 @@ function applyBye(state: MatchState, runs: number): MatchState {
     [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
   }
 
-  const maxLegal = state.config.format.oversPerInnings * 6;
-  const ns = { ...state, innings: replaceInnings(state, i) };
-  if (i.legalBalls >= maxLegal) return applyEndInnings(ns, 'overs_complete');
-  return ns;
+  return checkAutoEndInnings(state, i);
 }
 
 function applyLegBye(state: MatchState, runs: number): MatchState {
@@ -451,10 +443,40 @@ function applyLegBye(state: MatchState, runs: number): MatchState {
     [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
   }
 
-  const maxLegal = state.config.format.oversPerInnings * 6;
-  const ns = { ...state, innings: replaceInnings(state, i) };
-  if (i.legalBalls >= maxLegal) return applyEndInnings(ns, 'overs_complete');
-  return ns;
+  return checkAutoEndInnings(state, i);
+}
+
+function applyPenalty(state: MatchState, runs: number): MatchState {
+  const innings = currentInnings(state);
+  const i = deepClone(innings);
+  const overNumber = Math.floor(i.legalBalls / 6);
+
+  const event: DeliveryEvent = {
+    id: uuidv4(),
+    inningsId: i.id,
+    overNumber,
+    ballInOver: i.legalBalls % 6,
+    legalBallSequence: i.legalBalls,
+    deliveryType: 'penalty',
+    batterRuns: 0,
+    extras: runs,
+    totalRuns: runs,
+    isLegal: false,
+    isBoundary: false,
+    strikerId: i.currentStrikerId,
+    nonStrikerId: i.currentNonStrikerId,
+    bowlerId: i.currentBowlerId,
+    timestamp: new Date().toISOString(),
+  };
+  i.deliveries.push(event);
+
+  i.totalRuns += runs;
+  i.extras.penalties += runs;
+  i.extras.total += runs;
+
+  updatePartnership(i, runs, false);
+
+  return checkAutoEndInnings(state, i);
 }
 
 function applyWicket(state: MatchState, dismissal: DismissalInfo, runs: number): MatchState {
@@ -485,7 +507,7 @@ function applyWicket(state: MatchState, dismissal: DismissalInfo, runs: number):
     i.batterStats[dismissal.dismissedBatterId].strikeRate =
       calculateSR(i.batterStats[dismissal.dismissedBatterId].runs, i.batterStats[dismissal.dismissedBatterId].balls);
   } else {
-    ensureBatterStats(i, dismissal.dismissedBatterId);
+    ensureBatterStats(i, dismissal.dismissedBatterId, state.config);
     i.batterStats[dismissal.dismissedBatterId].balls += 1;
     i.batterStats[dismissal.dismissedBatterId].didBat = true;
     i.batterStats[dismissal.dismissedBatterId].strikeRate =
@@ -493,7 +515,7 @@ function applyWicket(state: MatchState, dismissal: DismissalInfo, runs: number):
   }
 
   // Bowler stats
-  ensureBowlerStats(i, i.currentBowlerId);
+  ensureBowlerStats(i, i.currentBowlerId, state.config);
   i.bowlerStats[i.currentBowlerId].legalBalls += 1;
   i.bowlerStats[i.currentBowlerId].runs += runs;
   if (dismissal.bowlerCredited) {
@@ -505,34 +527,18 @@ function applyWicket(state: MatchState, dismissal: DismissalInfo, runs: number):
   const isEndOfOver = i.legalBalls % 6 === 0;
   if (isEndOfOver) checkMaiden(i, overNumber);
 
-  // Process the dismissal
-  i = processWicket(i, dismissal, runs, state.config);
+  // Process the dismissal and set crease / strike positions
+  i = processWicket(i, dismissal, runs, state.config, isEndOfOver);
 
-  // Strike rotation (after wicket, based on completed runs)
-  // Non-dismissed batter retains or changes strike based on runs
-  if (!isAllOut(i, state.config)) {
-    // After run-out: complex — handled in processWicket for crossed batters
-    // For other dismissals: rotate if odd runs completed
-    if (dismissal.type !== 'run_out') {
-      if (shouldRotateStrike(runs, isEndOfOver)) {
-        [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
-      }
-    }
-  }
-
-  const ns = { ...state, innings: replaceInnings(state, i) };
-  if (isAllOut(i, state.config)) {
-    return applyEndInnings(ns, 'all_out');
-  }
-
-  const maxLegal = state.config.format.oversPerInnings * 6;
-  if (i.legalBalls >= maxLegal) return applyEndInnings(ns, 'overs_complete');
-
-  return ns;
+  return checkAutoEndInnings(state, i);
 }
 
 function processWicket(
-  i: InningsState, dismissal: DismissalInfo, _runs: number, _config: MatchState['config'],
+  i: InningsState,
+  dismissal: DismissalInfo,
+  _runs: number,
+  config: MatchConfig,
+  isEndOfOver: boolean = false,
 ): InningsState {
   // Close the active partnership
   const activePartnershipIdx = i.partnerships.findIndex(p => p.isActive);
@@ -540,11 +546,15 @@ function processWicket(
     i.partnerships[activePartnershipIdx].isActive = false;
   }
 
+  const bowlerName = getPlayerNameById(config, i.currentBowlerId);
+  const fielderName = dismissal.fielderId ? getPlayerNameById(config, dismissal.fielderId) : undefined;
+  const dismissalText = getDismissalText(dismissal.type, bowlerName, fielderName);
+
   // Mark batter as out
-  ensureBatterStats(i, dismissal.dismissedBatterId);
+  ensureBatterStats(i, dismissal.dismissedBatterId, config);
   i.batterStats[dismissal.dismissedBatterId].isOut = true;
   i.batterStats[dismissal.dismissedBatterId].dismissal = dismissal;
-  i.batterStats[dismissal.dismissedBatterId].dismissalText = getDismissalText(dismissal.type);
+  i.batterStats[dismissal.dismissedBatterId].dismissalText = dismissalText;
 
   // Wickets
   if (dismissal.type !== 'retired_hurt') {
@@ -556,47 +566,49 @@ function processWicket(
       score: i.totalRuns,
       overText: legalBallsToOverString(i.legalBalls),
       batterId: dismissal.dismissedBatterId,
-      batterName: i.batterStats[dismissal.dismissedBatterId]?.playerName ?? dismissal.dismissedBatterId,
-      dismissalText: getDismissalText(dismissal.type),
+      batterName: getPlayerNameById(config, dismissal.dismissedBatterId),
+      dismissalText,
       partnershipRuns: activePartnershipIdx >= 0 ? i.partnerships[activePartnershipIdx].runs : 0,
     };
     i.fallOfWickets.push(fow);
   }
 
-  // For run-out: determine who remains and handles strike
-  if (dismissal.type === 'run_out') {
-    const dismissedIsStriker = dismissal.dismissedBatterId === i.currentStrikerId;
-    const crossing = dismissal.crossingOccurred ?? false;
+  // Strike & Crease End Resolution
+  const dismissedIsStriker = dismissal.dismissedBatterId === i.currentStrikerId;
+  const survivingBatterId = dismissedIsStriker ? i.currentNonStrikerId : i.currentStrikerId;
 
-    if (dismissedIsStriker) {
-      // Striker dismissed. If crossing, non-striker ends up at striker end.
-      if (crossing) {
-        // Non-striker was running and has crossed — they should be at the striker's end
-        // New batter comes in at non-striker end
-        i.currentStrikerId = ''; // will be filled by UI prompting new batter
-      } else {
-        // No crossing — non-striker returns
-        // New batter at striker end
-        i.currentStrikerId = '';
-      }
+  if (dismissal.type === 'run_out') {
+    const crossing = dismissal.crossingOccurred ?? false;
+    // When batters run:
+    // If (striker out && !crossed) OR (non-striker out && crossed):
+    // surviving batter is at non-striker end, new batter enters at striker end.
+    if ((dismissedIsStriker && !crossing) || (!dismissedIsStriker && crossing)) {
+      i.currentStrikerId = '';
+      i.currentNonStrikerId = survivingBatterId;
     } else {
-      // Non-striker dismissed. Striker remains at their end.
-      if (crossing) {
-        // Batters had crossed — striker is now at non-striker end
-        // New batter at striker end, old striker at non-striker end
-        const tmpStriker = i.currentStrikerId;
-        i.currentStrikerId = ''; // placeholder new batter
-        i.currentNonStrikerId = tmpStriker;
-      }
-      // else: non-striker dismissed, striker stays, new batter at non-striker end
-      // currentNonStrikerId = '' handled below
+      // If (striker out && crossed) OR (non-striker out && !crossed):
+      // surviving batter is at striker end, new batter enters at non-striker end.
+      i.currentStrikerId = survivingBatterId;
+      i.currentNonStrikerId = '';
+    }
+
+    // At end of over, the bowling end changes so ends swap
+    if (isEndOfOver) {
+      [i.currentStrikerId, i.currentNonStrikerId] = [i.currentNonStrikerId, i.currentStrikerId];
     }
   } else {
-    // Non run-out: dismissed batter leaves, new batter comes in at their end
-    if (dismissal.dismissedBatterId === i.currentStrikerId) {
-      i.currentStrikerId = ''; // placeholder
+    // Non run-out dismissals (bowled, caught, lbw, stumped, hit wicket, etc.)
+    // Under MCC Law 18.11: New batter always faces the next ball (striker's end),
+    // UNLESS it was the end of the over (where ends change and the non-striker faces the next over).
+    if (isEndOfOver) {
+      // Over ended on wicket ball: ends swap.
+      // Surviving batter moves to striker's end to face ball 1 of next over; new batter at non-striker end.
+      i.currentStrikerId = survivingBatterId;
+      i.currentNonStrikerId = '';
     } else {
-      i.currentNonStrikerId = ''; // placeholder
+      // Mid-over wicket: incoming batter is at striker's end to face next ball.
+      i.currentStrikerId = '';
+      i.currentNonStrikerId = survivingBatterId;
     }
   }
 
@@ -622,7 +634,7 @@ function applySwapBatters(state: MatchState): MatchState {
 
 function applyRetiredHurt(state: MatchState, batterId: string, replacementId: string): MatchState {
   const innings = currentInnings(state);
-  let i = deepClone(innings);
+  const i = deepClone(innings);
 
   ensureBatterStats(i, batterId);
   i.batterStats[batterId].isRetiredHurt = true;
@@ -638,6 +650,43 @@ function applyRetiredHurt(state: MatchState, batterId: string, replacementId: st
   i.batterStats[replacementId].battingPosition = i.battingOrder.length + 1;
   if (!i.battingOrder.includes(replacementId)) {
     i.battingOrder.push(replacementId);
+  }
+
+  // Close previous partnership and start new one
+  const activePartnershipIdx = i.partnerships.findIndex(p => p.isActive);
+  if (activePartnershipIdx >= 0) {
+    i.partnerships[activePartnershipIdx].isActive = false;
+  }
+  const newPartnership: Partnership = {
+    batterAId: i.currentStrikerId,
+    batterBId: i.currentNonStrikerId,
+    runs: 0,
+    balls: 0,
+    isActive: true,
+    wicketNumber: i.wickets,
+  };
+  i.partnerships.push(newPartnership);
+
+  return { ...state, innings: replaceInnings(state, i) };
+}
+
+function checkAutoEndInnings(state: MatchState, i: InningsState): MatchState {
+  const maxLegal = state.config.format.oversPerInnings * 6;
+  const is2ndInnings = state.currentInningsIndex === 1;
+
+  // 1. Target reached in 2nd innings
+  if (is2ndInnings && i.target !== undefined && i.totalRuns >= i.target) {
+    return applyEndInnings({ ...state, innings: replaceInnings(state, i) }, 'target_reached');
+  }
+
+  // 2. All out
+  if (isAllOut(i, state.config)) {
+    return applyEndInnings({ ...state, innings: replaceInnings(state, i) }, 'all_out');
+  }
+
+  // 3. Overs completed
+  if (i.legalBalls >= maxLegal) {
+    return applyEndInnings({ ...state, innings: replaceInnings(state, i) }, 'overs_complete');
   }
 
   return { ...state, innings: replaceInnings(state, i) };
@@ -690,6 +739,7 @@ function applyStartNextInnings(
     state.config.id, uuidv4(), 2,
     battingTeamId, bowlingTeamId,
     strikerId, nonStrikerId, bowlerId,
+    state.config,
     target,
   );
 
@@ -733,15 +783,17 @@ function isAllOut(i: InningsState, config: MatchState['config']): boolean {
   return i.wickets >= config.format.playersPerSide - 1;
 }
 
-function ensureBatterStats(i: InningsState, id: string): void {
+function ensureBatterStats(i: InningsState, id: string, config?: MatchConfig): void {
   if (!i.batterStats[id]) {
-    i.batterStats[id] = makeBatterStats(id, '', i.battingOrder.indexOf(id) + 1, i.id);
+    const name = config ? getPlayerNameById(config, id) : '';
+    i.batterStats[id] = makeBatterStats(id, name, i.battingOrder.indexOf(id) + 1, i.id);
   }
 }
 
-function ensureBowlerStats(i: InningsState, id: string): void {
+function ensureBowlerStats(i: InningsState, id: string, config?: MatchConfig): void {
   if (!i.bowlerStats[id]) {
-    i.bowlerStats[id] = makeBowlerStats(id, '', i.id);
+    const name = config ? getPlayerNameById(config, id) : '';
+    i.bowlerStats[id] = makeBowlerStats(id, name, i.id);
   }
 }
 
@@ -754,12 +806,22 @@ function updatePartnership(i: InningsState, runs: number, isLegal: boolean): voi
 }
 
 function checkMaiden(i: InningsState, overNumber: number): void {
-  // Sum all runs conceded by current bowler in this over
+  // An over is a maiden if NO runs were conceded by the bowler (bat runs, wides, no-balls).
+  // Byes, leg byes, and penalties do NOT count against the bowler.
   const bowlerDeliveries = i.deliveries.filter(
     d => d.bowlerId === i.currentBowlerId && d.overNumber === overNumber
   );
-  const runsInOver = bowlerDeliveries.reduce((sum, d) => sum + d.totalRuns, 0);
-  if (runsInOver === 0) {
+  const runsConcededByBowler = bowlerDeliveries.reduce((sum, d) => {
+    if (d.deliveryType === 'bye' || d.deliveryType === 'leg_bye' || d.deliveryType === 'penalty') {
+      return sum;
+    }
+    if (d.deliveryType === 'no_ball') {
+      return sum + 1 + d.batterRuns; // penalty 1 + bat runs (byes/leg byes off no ball not charged to bowler)
+    }
+    return sum + d.totalRuns;
+  }, 0);
+
+  if (runsConcededByBowler === 0 && bowlerDeliveries.some(d => d.isLegal)) {
     i.bowlerStats[i.currentBowlerId].maidens += 1;
   }
 }
@@ -774,12 +836,15 @@ function calculateMatchResult(config: MatchConfig, innings: InningsState[]): Mat
 
   if (inn2.totalRuns > inn1.totalRuns) {
     const wicketsRemaining = config.format.playersPerSide - 1 - inn2.wickets;
+    const maxLegalBalls = config.format.oversPerInnings * 6;
+    const ballsRemaining = Math.max(0, maxLegalBalls - inn2.legalBalls);
     const margin = `${wicketsRemaining} wicket${wicketsRemaining !== 1 ? 's' : ''}`;
+    const ballsText = ballsRemaining > 0 ? ` (with ${ballsRemaining} ball${ballsRemaining !== 1 ? 's' : ''} remaining)` : '';
     return {
       winner: inn2.battingTeamId === config.teamA.id ? 'teamA' : 'teamB',
       winnerName: team2Name,
       margin,
-      resultText: `${team2Name} won by ${margin}`,
+      resultText: `${team2Name} won by ${margin}${ballsText}`,
     };
   } else if (inn2.totalRuns < inn1.totalRuns) {
     const margin = `${inn1.totalRuns - inn2.totalRuns} run${inn1.totalRuns - inn2.totalRuns !== 1 ? 's' : ''}`;
@@ -805,8 +870,11 @@ export function addNewBatter(state: MatchState, batterId: string): MatchState {
   if (!i.battingOrder.includes(batterId)) {
     i.battingOrder.push(batterId);
   }
-  ensureBatterStats(i, batterId);
+  ensureBatterStats(i, batterId, state.config);
   i.batterStats[batterId].battingPosition = i.battingOrder.indexOf(batterId) + 1;
+  i.batterStats[batterId].isRetiredHurt = false;
+  i.batterStats[batterId].isOut = false;
+  i.retiredHurtIds = i.retiredHurtIds.filter(id => id !== batterId);
 
   // Place in the empty slot
   if (!i.currentStrikerId || i.currentStrikerId === '') {
@@ -824,6 +892,101 @@ export function addNewBatter(state: MatchState, batterId: string): MatchState {
   i.partnerships.push(newPartnership);
 
   return { ...state, innings: replaceInnings(state, i) };
+}
+
+// ============================================================
+// Delivery Editing & Innings Recalculation
+// ============================================================
+
+function applyEditDelivery(
+  state: MatchState,
+  deliveryId: string,
+  updatedDelivery: Partial<DeliveryEvent>
+): MatchState {
+  const innings = currentInnings(state);
+  const deliveryIndex = innings.deliveries.findIndex(d => d.id === deliveryId);
+  if (deliveryIndex === -1) return state;
+
+  const updatedDeliveries = [...innings.deliveries];
+  updatedDeliveries[deliveryIndex] = {
+    ...updatedDeliveries[deliveryIndex],
+    ...updatedDelivery,
+  };
+
+  const updatedInnings = recalculateInnings(
+    { ...innings, deliveries: updatedDeliveries },
+    state.config
+  );
+
+  const newInningsList = replaceInnings(state, updatedInnings);
+  const result = newInningsList.length > 1
+    ? calculateMatchResult(state.config, newInningsList)
+    : undefined;
+
+  return {
+    ...state,
+    innings: newInningsList,
+    result: result ?? state.result,
+  };
+}
+
+export function recalculateInnings(innings: InningsState, config: MatchConfig): InningsState {
+  if (innings.deliveries.length === 0) return innings;
+
+  const deliveries = [...innings.deliveries];
+  const firstDel = deliveries[0];
+  const openingStrikerId = firstDel.strikerId;
+  const openingNonStrikerId = firstDel.nonStrikerId;
+  const openingBowlerId = firstDel.bowlerId;
+
+  let replayed = createInnings(
+    innings.matchId,
+    innings.id,
+    innings.inningsNumber,
+    innings.battingTeamId,
+    innings.bowlingTeamId,
+    openingStrikerId,
+    openingNonStrikerId,
+    openingBowlerId,
+    config,
+    innings.target
+  );
+
+  replayed.battingOrder = [...innings.battingOrder];
+
+  let dummyState: MatchState = {
+    config,
+    innings: [replayed],
+    currentInningsIndex: 0,
+    status: 'live',
+    history: [],
+  };
+
+  for (const del of deliveries) {
+    if (del.deliveryType === 'normal') {
+      if (del.dismissal) {
+        dummyState = applyWicket(dummyState, del.dismissal, del.batterRuns);
+      } else {
+        dummyState = applyNormalDelivery(dummyState, del.batterRuns, del.isBoundary, del.boundaryType);
+      }
+    } else if (del.deliveryType === 'wide') {
+      dummyState = applyWide(dummyState, Math.max(0, del.extras - 1), del.dismissal);
+    } else if (del.deliveryType === 'no_ball') {
+      dummyState = applyNoBall(dummyState, del.batterRuns, undefined, 0, del.dismissal);
+    } else if (del.deliveryType === 'bye') {
+      dummyState = applyBye(dummyState, del.extras);
+    } else if (del.deliveryType === 'leg_bye') {
+      dummyState = applyLegBye(dummyState, del.extras);
+    } else if (del.deliveryType === 'penalty') {
+      dummyState = applyPenalty(dummyState, del.extras);
+    }
+  }
+
+  const finalInnings = dummyState.innings[0];
+  finalInnings.id = innings.id;
+  finalInnings.status = innings.status;
+  finalInnings.completionReason = innings.completionReason;
+  return finalInnings;
 }
 
 // ============================================================

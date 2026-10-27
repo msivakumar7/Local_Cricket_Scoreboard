@@ -73,8 +73,9 @@ export function generateMatchPDF(state: MatchState): void {
     ]);
 
     // Add extras and total
+    const penaltyText = innings.extras.penalties ? ` P ${innings.extras.penalties}` : '';
     battingRows.push([
-      'Extras', `W ${innings.extras.wides} NB ${innings.extras.noBalls} B ${innings.extras.byes} LB ${innings.extras.legByes}`,
+      'Extras', `W ${innings.extras.wides} NB ${innings.extras.noBalls} B ${innings.extras.byes} LB ${innings.extras.legByes}${penaltyText}`,
       String(innings.extras.total), '', '', '', '',
     ]);
     battingRows.push([
@@ -148,7 +149,26 @@ export function generateMatchPDF(state: MatchState): void {
       },
       alternateRowStyles: { fillColor: [245, 249, 255] },
     });
-    y = (doc as any).lastAutoTable.finalY + 10;
+    y = (doc as any).lastAutoTable.finalY + 6;
+
+    // Partnerships
+    const validPartnerships = innings.partnerships.filter(p => p.runs > 0 || p.isActive);
+    if (validPartnerships.length > 0) {
+      if (y > 240) { doc.addPage(); y = 15; }
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(96, 117, 138);
+      doc.text('Partnerships:', 10, y);
+      y += 4;
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(23, 43, 77);
+      const partText = validPartnerships
+        .map(p => `${getPlayerName(innings.battingTeamId, p.batterAId)} & ${getPlayerName(innings.battingTeamId, p.batterBId)}: ${p.runs} runs (${p.balls}b)`)
+        .join('  |  ');
+      const partLines = doc.splitTextToSize(partText, pageW - 20);
+      doc.text(partLines, 10, y);
+      y += partLines.length * 4 + 6;
+    }
 
     if (idx < state.innings.length - 1 && y > 240) {
       doc.addPage();

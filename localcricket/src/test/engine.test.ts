@@ -62,6 +62,10 @@ describe('LocalCricket Rules Engine', () => {
     state = createInitialMatchState(sampleConfig, 'p1', 'p2', 'b1');
   });
 
+  function createTestMatch(): MatchState {
+    return createInitialMatchState(sampleConfig, 'p1', 'p2', 'b1');
+  }
+
   describe('1. Ordinary Runs & Strike Rotation', () => {
     it('scores 0 (dot ball) without strike rotation', () => {
       state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 0 });
@@ -221,7 +225,7 @@ describe('LocalCricket Rules Engine', () => {
       expect(inn.wickets).toBe(1);
       expect(inn.legalBalls).toBe(1);
       expect(inn.batterStats['p1'].isOut).toBe(true);
-      expect(inn.batterStats['p1'].dismissalText).toBe('b ');
+      expect(inn.batterStats['p1'].dismissalText).toBe('b Bumrah');
       expect(inn.bowlerStats['b1'].wickets).toBe(1);
       expect(inn.fallOfWickets.length).toBe(1);
       expect(inn.fallOfWickets[0].score).toBe(0);
@@ -294,18 +298,19 @@ describe('LocalCricket Rules Engine', () => {
       expect(state.innings[0].currentNonStrikerId).toBe('p1');
     });
 
-    it('rotates strike at the end of an over on a single', () => {
+    it('rotates strike at the end of an over on a single (batter running odd run retains strike)', () => {
       // 5 dot balls
       for (let b = 0; b < 5; b++) {
         state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 0 });
       }
-      // 6th ball is a single: run rotation (swap) + end of over (swap) = no swap (stay with p1)
-      // Odd runs on end of over: runner crossed (p2 is at striker's end), but now over ends,
-      // so bowlers swap ends -> p1 faces!
+      // 6th ball is a single:
+      // Striker p1 runs to the opposite end (now bowler's end).
+      // Over ends: bowling end shifts to that end.
+      // Therefore, p1 is now facing the next over! Strike does not swap to p2.
       state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 1 });
-      // In shouldRotateStrike(1, true): returns true, so batters swap
       expect(state.innings[0].legalBalls).toBe(6);
-      expect(state.innings[0].currentStrikerId).toBe('p2');
+      expect(state.innings[0].currentStrikerId).toBe('p1');
+      expect(state.innings[0].currentNonStrikerId).toBe('p2');
     });
   });
 
@@ -427,17 +432,185 @@ describe('LocalCricket Rules Engine', () => {
       expect(state.currentInningsIndex).toBe(1);
       expect(state.innings[1].target).toBe(11);
 
-      // Titans score 6 then 6 = 12 runs (exceeding target of 11)
+      // Titans score 6 (total 6, target 11) -> still live
       state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 6 });
+      expect(state.status).toBe('live');
+
+      // Titans score another 6 (total 12, target 11) -> automatically completes match!
       state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 6 });
 
       expect(checkTargetReached(state)).toBe(true);
-
-      // End innings on target reached
-      state = applyAction(state, { type: 'END_INNINGS' });
       expect(state.status).toBe('completed');
       expect(state.result?.winner).toBe('teamB');
       expect(state.result?.resultText).toContain('Titans won');
+    });
+  });
+
+  // ============================================================
+  // 11. Advanced Run Out & Crease Resolution
+  // ============================================================
+  describe('11. Advanced Run Out & Crease Resolution', () => {
+    it('striker run out without crossing leaves non-striker at non-striker end', () => {
+      let state = createTestMatch();
+      const dismissal: DismissalInfo = {
+        type: 'run_out',
+        dismissedBatterId: 'p1', // Striker
+        crossingOccurred: false,
+        bowlerCredited: false,
+      };
+      state = applyAction(state, { type: 'WICKET', dismissal, runs: 0 });
+      const inn = state.innings[0];
+      // p1 is out; slot for new batter is striker end; non-striker p2 stays at non-striker end
+      expect(inn.currentStrikerId).toBe('');
+      expect(inn.currentNonStrikerId).toBe('p2');
+
+      // Add new batter p3
+      state = addNewBatter(state, 'p3');
+      expect(state.innings[0].currentStrikerId).toBe('p3');
+      expect(state.innings[0].currentNonStrikerId).toBe('p2');
+    });
+
+    it('striker run out WITH crossing moves non-striker to striker end', () => {
+      let state = createTestMatch();
+      const dismissal: DismissalInfo = {
+        type: 'run_out',
+        dismissedBatterId: 'p1', // Striker
+        crossingOccurred: true, // crossed!
+        bowlerCredited: false,
+      };
+      state = applyAction(state, { type: 'WICKET', dismissal, runs: 1 });
+      const inn = state.innings[0];
+      // Batters crossed, so surviving non-striker p2 is now at striker end!
+      // New batter enters at non-striker end
+      expect(inn.currentStrikerId).toBe('p2');
+      expect(inn.currentNonStrikerId).toBe('');
+
+      // Add new batter p3
+      state = addNewBatter(state, 'p3');
+      expect(state.innings[0].currentStrikerId).toBe('p2');
+      expect(state.innings[0].currentNonStrikerId).toBe('p3');
+    });
+
+    it('non-striker run out WITH crossing leaves striker at non-striker end', () => {
+      let state = createTestMatch();
+      const dismissal: DismissalInfo = {
+        type: 'run_out',
+        dismissedBatterId: 'p2', // Non-striker
+        crossingOccurred: true, // crossed!
+        bowlerCredited: false,
+      };
+      state = applyAction(state, { type: 'WICKET', dismissal, runs: 1 });
+      const inn = state.innings[0];
+      // Batters crossed: striker p1 is now at non-striker end. New batter at striker end.
+      expect(inn.currentStrikerId).toBe('');
+      expect(inn.currentNonStrikerId).toBe('p1');
+
+      state = addNewBatter(state, 'p3');
+      expect(state.innings[0].currentStrikerId).toBe('p3');
+      expect(state.innings[0].currentNonStrikerId).toBe('p1');
+    });
+
+    it('run out on 6th ball (end of over) swaps ends appropriately', () => {
+      let state = createTestMatch();
+      // Bowl 5 dot balls
+      for (let i = 0; i < 5; i++) {
+        state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 0 });
+      }
+      expect(state.innings[0].legalBalls).toBe(5);
+
+      // 6th ball: Striker run out, didn't cross
+      const dismissal: DismissalInfo = {
+        type: 'run_out',
+        dismissedBatterId: 'p1',
+        crossingOccurred: false,
+        bowlerCredited: false,
+      };
+      state = applyAction(state, { type: 'WICKET', dismissal, runs: 0 });
+      const inn = state.innings[0];
+      expect(inn.legalBalls).toBe(6);
+
+      // Over ended, so bowling end changes!
+      // Surviving batter p2 moves to striker end to face next over
+      // New batter will enter at non-striker end
+      expect(inn.currentStrikerId).toBe('p2');
+      expect(inn.currentNonStrikerId).toBe('');
+
+      state = addNewBatter(state, 'p3');
+      expect(state.innings[0].currentStrikerId).toBe('p2');
+      expect(state.innings[0].currentNonStrikerId).toBe('p3');
+    });
+  });
+
+  // ============================================================
+  // 12. Maiden Over Rules
+  // ============================================================
+  describe('12. Maiden Over Rules', () => {
+    it('credits maiden over when runs are scored only off byes (not off bowler)', () => {
+      let state = createTestMatch();
+      // 5 dot balls
+      for (let i = 0; i < 5; i++) {
+        state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 0 });
+      }
+      // 6th ball: 2 byes
+      state = applyAction(state, { type: 'BYE', runs: 2 });
+
+      const inn = state.innings[0];
+      expect(inn.legalBalls).toBe(6);
+      expect(inn.totalRuns).toBe(2);
+      expect(inn.extras.byes).toBe(2);
+      expect(inn.bowlerStats['b1'].runs).toBe(0); // Bowler conceded 0
+      expect(inn.bowlerStats['b1'].maidens).toBe(1); // MAIDEN credited!
+    });
+  });
+
+  // ============================================================
+  // 13. Retired Hurt & Return to Crease
+  // ============================================================
+  describe('13. Retired Hurt', () => {
+    it('retires a batter hurt and allows substitution without adding to wickets', () => {
+      let state = createTestMatch();
+      state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 4 });
+      state = applyAction(state, { type: 'RETIRED_HURT', batterId: 'p1', replacementId: 'p3' });
+
+      const inn = state.innings[0];
+      expect(inn.wickets).toBe(0); // not a dismissal
+      expect(inn.batterStats['p1'].isRetiredHurt).toBe(true);
+      expect(inn.retiredHurtIds).toContain('p1');
+      expect(inn.currentStrikerId).toBe('p3');
+    });
+  });
+
+  // ============================================================
+  // 14. Delivery Editing and Score Correction
+  // ============================================================
+  describe('14. Delivery Editing & Innings Recalculation', () => {
+    it('edits a past delivery and recalculates totalRuns and batterStats correctly', () => {
+      let state = createTestMatch();
+      // Delivery 1: 1 run
+      state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 1 });
+      // Delivery 2: 2 runs
+      state = applyAction(state, { type: 'NORMAL_DELIVERY', runs: 2 });
+
+      expect(state.innings[0].totalRuns).toBe(3);
+      const firstDeliveryId = state.innings[0].deliveries[0].id;
+
+      // Edit delivery 1: change from 1 run to a boundary 4!
+      state = applyAction(state, {
+        type: 'EDIT_DELIVERY',
+        deliveryId: firstDeliveryId,
+        updatedDelivery: { batterRuns: 4, totalRuns: 4, isBoundary: true, boundaryType: 4 },
+      });
+
+      const inn = state.innings[0];
+      // Total runs should now be 4 + 2 = 6
+      expect(inn.totalRuns).toBe(6);
+      expect(inn.deliveries[0].batterRuns).toBe(4);
+      // Because delivery 1 became a 4 (boundary), strike was NOT rotated.
+      // Rohit (p1) remained on strike and faced delivery 2, scoring 2 more runs.
+      // Total for Rohit (p1) is 4 + 2 = 6 runs!
+      expect(inn.batterStats['p1'].runs).toBe(6);
+      expect(inn.batterStats['p1'].fours).toBe(1);
+      expect(inn.batterStats['p2'].runs).toBe(0);
     });
   });
 });

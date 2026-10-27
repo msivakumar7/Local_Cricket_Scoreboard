@@ -34,16 +34,20 @@ export function isBowlerCredited(type: DismissalType): boolean {
 
 /**
  * Determines if strike should swap based on completed runs and end-of-over status.
- * - End of over: always swap.
- * - Odd completed runs: swap.
- * - Even completed runs: no swap.
+ * - During an over: odd completed runs swap strike; even runs do not.
+ * - At end of over: ends change. An odd run swaps physical ends AND the bowling end changes,
+ *   meaning the batter who ran the single retains the strike for the new over.
+ *   Conversely, on an even score/dot ball, the other batter faces the new over.
  */
 export function shouldRotateStrike(
   completedRuns: number,
   isEndOfOver: boolean
 ): boolean {
-  if (isEndOfOver) return true;
-  return completedRuns % 2 !== 0;
+  const oddRuns = completedRuns % 2 !== 0;
+  if (isEndOfOver) {
+    return !oddRuns;
+  }
+  return oddRuns;
 }
 
 /** Human-readable dismissal text */

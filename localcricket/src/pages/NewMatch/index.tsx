@@ -124,6 +124,27 @@ export default function NewMatch() {
   const battingPlayers = battingTeamId === teamAId ? teamAPlayers : teamBPlayers;
   const bowlingPlayers = bowlingTeamId === teamAId ? teamAPlayers : teamBPlayers;
 
+  function fillDemoSquads() {
+    const demoA = ['Rohit Sharma', 'Virat Kohli', 'Surya Kumar', 'Rishabh Pant', 'Hardik Pandya', 'Ravindra Jadeja', 'R Ashwin', 'Jasprit Bumrah', 'Mohd Shami', 'Kuldeep Yadav', 'Mohd Siraj'];
+    const demoB = ['David Warner', 'Travis Head', 'Steve Smith', 'Marnus Labuschagne', 'Glenn Maxwell', 'Alex Carey', 'Mitchell Starc', 'Pat Cummins', 'Adam Zampa', 'Josh Hazlewood', 'Nathan Lyon'];
+    const pA = demoA.slice(0, playersPerSide).map((name, i) => ({
+      id: uuidv4(),
+      name,
+      isCaptain: i === 0,
+      isWicketkeeper: i === 3,
+    }));
+    const pB = demoB.slice(0, playersPerSide).map((name, i) => ({
+      id: uuidv4(),
+      name,
+      isCaptain: i === 7,
+      isWicketkeeper: i === 5,
+    }));
+    setTeamAPlayers(pA);
+    setTeamBPlayers(pB);
+    if (!teamAName.trim()) setTeamAName('Warriors');
+    if (!teamBName.trim()) setTeamBName('Titans');
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F9FF]">
       {/* Header */}
@@ -246,7 +267,16 @@ export default function NewMatch() {
         {/* STEP 2: Players */}
         {currentStep === 'players' && (
           <div className="space-y-6">
-            <h2 className="text-xl font-bold text-[#172B4D]">Add Players</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-[#172B4D]">Add Players</h2>
+              <button
+                type="button"
+                onClick={fillDemoSquads}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#E3F2FD] text-[#1565C0] hover:bg-[#BBDEFB] transition-colors min-h-[36px]"
+              >
+                ⚡ Auto-fill Demo Squads
+              </button>
+            </div>
             <PlayerEntry
               teamName={teamAName || 'Team A'}
               players={teamAPlayers}

@@ -82,17 +82,29 @@ export default function RunOutDialog({ isOpen, onClose, onConfirm, innings, batt
           <p className="text-base font-semibold text-[#172B4D] mb-4">
             <strong>{dismissedPlayer?.name}</strong> run out
           </p>
-          <div className="grid grid-cols-4 gap-2 mb-4">
+          <div className="grid grid-cols-5 gap-2 mb-4">
             {[0, 1, 2, 3].map(r => (
               <button
                 key={r}
+                type="button"
                 onClick={() => setCompletedRuns(r)}
-                className={`py-4 rounded-xl border-2 text-xl font-extrabold transition-colors min-h-[60px]
+                className={`py-3 rounded-xl border-2 text-xl font-extrabold transition-colors min-h-[56px]
                   ${completedRuns === r ? 'border-[#1565C0] bg-[#E3F2FD] text-[#1565C0]' : 'border-[#DCE7F5] bg-white hover:border-[#1565C0]'}`}
               >
                 {r}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                const val = prompt('Enter completed runs:', '4');
+                if (val !== null) setCompletedRuns(Math.max(0, parseInt(val, 10) || 0));
+              }}
+              className={`py-3 rounded-xl border-2 text-xs font-bold transition-colors min-h-[56px]
+                ${completedRuns > 3 ? 'border-[#1565C0] bg-[#E3F2FD] text-[#1565C0]' : 'border-[#DCE7F5] bg-white hover:border-[#1565C0]'}`}
+            >
+              {completedRuns > 3 ? completedRuns : 'Custom'}
+            </button>
           </div>
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep('who')}>Back</Button>
@@ -131,10 +143,15 @@ export default function RunOutDialog({ isOpen, onClose, onConfirm, innings, batt
         <div>
           <p className="text-base font-bold text-[#172B4D] mb-4">Confirm Run Out</p>
           <Card className="p-4 mb-5 space-y-2 bg-[#F5F9FF]">
-            <Row label="Dismissed" value={dismissedPlayer?.name ?? '—'} highlight />
-            <Row label="Position" value={dismissedId === innings.currentStrikerId ? 'Striker' : 'Non-striker'} />
-            <Row label="Completed runs" value={String(completedRuns)} />
-            <Row label="Batters crossed" value={crossingOccurred ? 'Yes' : 'No'} />
+            <Row label="Dismissed Batter" value={dismissedPlayer?.name ?? '—'} highlight />
+            <Row label="Dismissed Position" value={dismissedId === innings.currentStrikerId ? 'Striker' : 'Non-striker'} />
+            <Row label="Completed Runs" value={String(completedRuns)} />
+            <Row label="Delivery Legality" value="Legal delivery" />
+            <Row label="Batters Crossed" value={crossingOccurred ? 'Yes (crossed)' : 'No (did not cross)'} />
+            <div className="pt-2 border-t border-[#DCE7F5]">
+              <Row label="Team Total After Event" value={`${innings.totalRuns + completedRuns}/${innings.wickets + 1}`} />
+              <Row label="Wickets After Event" value={`${innings.wickets + 1}`} />
+            </div>
           </Card>
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep('crossing')}>Back</Button>
