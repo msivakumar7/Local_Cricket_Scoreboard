@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #1565C0;
+  --primary-dark: #0D47A1;
+  --primary-light: #42A5F5;
+  --primary-soft: #E3F2FD;
+  --background: #F5F9FF;
+  --surface: #FFFFFF;
+  --text-primary: #172B4D;
+  --text-secondary: #60758A;
+  --success: #16803C;
+  --danger: #D32F2F;
+  --warning: #F59E0B;
+  --border: #DCE7F5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: #F5F9FF;
+  color: #172B4D;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+}
+
+/* Tabular nums for scores */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scrollbar hiding */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Input field base style */
+.input-field {
+  width: 100%;
+  padding: 0.75rem;
+  background-color: #FFFFFF;
+  border: 1px solid #DCE7F5;
+  border-radius: 0.5rem;
+  color: #172B4D;
+  font-size: 0.875rem;
+  min-height: 48px;
+  outline: none;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.input-field:focus {
+  border-color: #1565C0;
+  box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.25);
+}
+
+.input-field::placeholder {
+  color: #60758A;
+}
+
+/* Safe area padding */
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

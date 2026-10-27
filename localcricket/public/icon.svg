@@ -1,0 +1,7 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>
+  <rect width='512' height='512' rx='100' fill='#1565C0'/>
+  <circle cx='256' cy='256' r='140' fill='#0D47A1' stroke='#FFFFFF' stroke-width='16'/>
+  <path d='M210 160 L330 320 M302 160 L182 320' stroke='#FFFFFF' stroke-width='16' stroke-linecap='round'/>
+  <circle cx='256' cy='256' r='40' fill='#42A5F5'/>
+  <text x='256' y='460' font-family='sans-serif' font-size='64' font-weight='bold' fill='#FFFFFF' text-anchor='middle'>LOCALCRICKET</text>
+</svg>
