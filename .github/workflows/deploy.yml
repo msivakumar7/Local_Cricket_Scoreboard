@@ -1,8 +1,8 @@
 name: Deploy to GitHub Pages
 
-on:
+'on':
   push:
-    branches: [main, master]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -39,9 +39,19 @@ jobs:
         working-directory: localcricket
         run: npm test
 
+      - name: Run TypeScript verification
+        working-directory: localcricket
+        run: npm run lint
+
       - name: Build production app
         working-directory: localcricket
         run: npm run build
+
+      - name: Verify build outputs
+        run: |
+          test -f localcricket/dist/index.html || { echo "Error: localcricket/dist/index.html missing"; exit 1; }
+          test -f localcricket/dist/404.html || { echo "Error: localcricket/dist/404.html missing"; exit 1; }
+          echo "Verified: index.html and 404.html present."
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
