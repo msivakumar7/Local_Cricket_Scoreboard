@@ -21,6 +21,8 @@ export interface MatchFormat {
   playersPerSide: number;
 }
 
+export type PlayerEntryMode = 'dynamic' | 'pre_enter';
+
 export type MatchStatus = 'setup' | 'live' | 'innings_break' | 'completed' | 'abandoned';
 
 export interface MatchConfig {
@@ -29,6 +31,7 @@ export interface MatchConfig {
   venue: string;
   date: string;
   format: MatchFormat;
+  entryMode?: PlayerEntryMode;
   teamA: Team;
   teamB: Team;
   tossWinnerId: string; // team id
@@ -76,6 +79,7 @@ export interface DeliveryEvent {
   legalBallSequence: number;  // monotonically increasing legal ball count (0-based)
   deliveryType: DeliveryType;
   batterRuns: number;         // runs credited to the striker
+  completedRuns?: number;     // runs completed by batters on extras (e.g. wide)
   extras: number;             // extra runs on this delivery
   totalRuns: number;          // batterRuns + extras
   isLegal: boolean;           // false for wide / no-ball
@@ -216,6 +220,9 @@ export type ScoringAction =
   | { type: 'LEG_BYE'; runs: number }
   | { type: 'PENALTY'; runs: number }
   | { type: 'WICKET'; dismissal: DismissalInfo; runs?: number }
+  | { type: 'ADD_BATTER'; batterId: string; newPlayerName?: string }
+  | { type: 'UPDATE_PLAYER_NAME'; playerId: string; newName: string }
+  | { type: 'ADD_BOWLER'; bowlerId: string; bowlerName: string }
   | { type: 'RETIRED_HURT'; batterId: string; replacementId: string }
   | { type: 'CHANGE_BOWLER'; bowlerId: string }
   | { type: 'SWAP_BATTERS' }

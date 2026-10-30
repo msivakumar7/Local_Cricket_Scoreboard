@@ -613,4 +613,286 @@ describe('LocalCricket Rules Engine', () => {
       expect(inn.batterStats['p2'].runs).toBe(0);
     });
   });
+
+  // ============================================================
+  // 15. Dynamic Player Entry & Progressive Lineup Expansion
+  // ============================================================
+  describe('15. Dynamic Player Entry Mode', () => {
+    it('starts match with only 2 opening batters and adds 3rd batter on wicket without errors', () => {
+      // Create config with only 2 players in Team A, but 11 players per side format
+      const dynamicConfig: MatchConfig = {
+        ...sampleConfig,
+        format: { oversPerInnings: 20, maxOversPerBowler: 4, playersPerSide: 11 },
+        teamA: {
+          id: 'team-a',
+          name: 'Chennai Super Stars',
+          players: [
+            { id: 'siva', name: 'Siva', isCaptain: true, isWicketkeeper: false },
+            { id: 'kumar', name: 'Kumar', isCaptain: false, isWicketkeeper: false },
+          ],
+        },
+      };
+
+      let dynamicState = createInitialMatchState(dynamicConfig, 'siva', 'kumar', 'b1');
+      expect(dynamicState.config.teamA.players.length).toBe(2);
+
+      // Score 20 runs (e.g. two 6s, two 4s = 4 balls)
+      dynamicState = applyAction(dynamicState, { type: 'NORMAL_DELIVERY', runs: 6, isBoundary: true, boundaryType: 6 });
+      dynamicState = applyAction(dynamicState, { type: 'NORMAL_DELIVERY', runs: 6, isBoundary: true, boundaryType: 6 });
+      dynamicState = applyAction(dynamicState, { type: 'NORMAL_DELIVERY', runs: 4, isBoundary: true, boundaryType: 4 });
+      dynamicState = applyAction(dynamicState, { type: 'NORMAL_DELIVERY', runs: 4, isBoundary: true, boundaryType: 4 });
+      expect(dynamicState.innings[0].totalRuns).toBe(20);
+      expect(dynamicState.innings[0].batterStats['siva'].runs).toBe(20);
+
+      // Dismiss striker Siva on ball 5 (mid-over)
+      dynamicState = applyAction(dynamicState, {
+        type: 'WICKET',
+        dismissal: { type: 'bowled', dismissedBatterId: 'siva', bowlerCredited: true },
+        runs: 0,
+      });
+
+      expect(dynamicState.innings[0].wickets).toBe(1);
+      expect(dynamicState.innings[0].currentStrikerId).toBe('');
+      expect(dynamicState.innings[0].currentNonStrikerId).toBe('kumar');
+
+      // Add dynamic 3rd batter "Ravi"
+      dynamicState = applyAction(dynamicState, {
+        type: 'ADD_BATTER',
+        batterId: 'ravi',
+        newPlayerName: 'Ravi',
+      });
+
+      const inn = dynamicState.innings[0];
+      // Team A now has 3 registered players
+      expect(dynamicState.config.teamA.players.length).toBe(3);
+      expect(dynamicState.config.teamA.players.find(p => p.id === 'ravi')?.name).toBe('Ravi');
+      expect(inn.currentStrikerId).toBe('ravi');
+      expect(inn.currentNonStrikerId).toBe('kumar');
+      expect(inn.battingOrder).toEqual(['siva', 'kumar', 'ravi']);
+      expect(inn.batterStats['ravi'].playerName).toBe('Ravi');
+      expect(inn.batterStats['ravi'].runs).toBe(0);
+
+      // Ravi scores a single
+      dynamicState = applyAction(dynamicState, { type: 'NORMAL_DELIVERY', runs: 1 });
+      expect(dynamicState.innings[0].totalRuns).toBe(21);
+      expect(dynamicState.innings[0].batterStats['ravi'].runs).toBe(1);
+      expect(dynamicState.innings[0].batterStats['ravi'].balls).toBe(1);
+    });
+
+    it('progressively adds 5 successive new batters on wickets without prematurely ending innings', () => {
+      const dynamicConfig: MatchConfig = {
+        ...sampleConfig,
+        format: { oversPerInnings: 20, maxOversPerBowler: 4, playersPerSide: 11 },
+        teamA: {
+          id: 'team-a',
+          name: 'Warriors',
+          players: [
+            { id: 'p1', name: 'Siva', isCaptain: true, isWicketkeeper: false },
+            { id: 'p2', name: 'Kumar', isCaptain: false, isWicketkeeper: false },
+          ],
+        },
+      };
+
+      let dynState = createInitialMatchState(dynamicConfig, 'p1', 'p2', 'b1');
+      const incomingBatters = [
+        { id: 'p3', name: 'Ravi' },
+        { id: 'p4', name: 'Arun' },
+        { id: 'p5', name: 'Praveen' },
+        { id: 'p6', name: 'Karthik' },
+        { id: 'p7', name: 'Manoj' },
+      ];
+
+      for (let w = 0; w < incomingBatters.length; w++) {
+        const outBatterId = dynState.innings[0].currentStrikerId;
+        dynState = applyAction(dynState, {
+          type: 'WICKET',
+          dismissal: { type: 'caught', dismissedBatterId: outBatterId, bowlerCredited: true },
+          runs: 0,
+        });
+
+        expect(dynState.innings[0].wickets).toBe(w + 1);
+        expect(dynState.status).toBe('live'); // Never prematurely completed!
+
+        dynState = applyAction(dynState, {
+          type: 'ADD_BATTER',
+          batterId: incomingBatters[w].id,
+          newPlayerName: incomingBatters[w].name,
+        });
+
+        expect(dynState.innings[0].batterStats[incomingBatters[w].id].playerName).toBe(incomingBatters[w].name);
+      }
+
+      expect(dynState.innings[0].wickets).toBe(5);
+      expect(dynState.config.teamA.players.length).toBe(7); // 2 original + 5 dynamic
+      expect(dynState.status).toBe('live');
+    });
+  });
+
+  // ============================================================
+  // 16. Player Name Editing with Complete Data Integrity
+  // ============================================================
+  describe('16. Player Name Editing & Data Integrity', () => {
+    it('updates player name everywhere without resetting runs, balls, boundaries, or bowling figures', () => {
+      let testState = createTestMatch();
+      // p1 (Rohit) scores 30 runs (five 6s = 5 balls)
+      for (let i = 0; i < 5; i++) {
+        testState = applyAction(testState, { type: 'NORMAL_DELIVERY', runs: 6, isBoundary: true, boundaryType: 6 });
+      }
+
+      expect(testState.innings[0].batterStats['p1'].runs).toBe(30);
+      expect(testState.innings[0].batterStats['p1'].sixes).toBe(5);
+      expect(testState.innings[0].batterStats['p1'].fours).toBe(0);
+      expect(testState.innings[0].bowlerStats['b1'].runs).toBe(30);
+
+      // Dismiss p1 on ball 6 (completing 6 balls for p1)
+      testState = applyAction(testState, {
+        type: 'WICKET',
+        dismissal: { type: 'bowled', dismissedBatterId: 'p1', bowlerCredited: true },
+        runs: 0,
+      });
+
+      expect(testState.innings[0].fallOfWickets[0].batterName).toBe('Rohit');
+
+      // Edit p1's name from "Rohit" to "Rohit Sharma (Captain)"
+      testState = applyAction(testState, {
+        type: 'UPDATE_PLAYER_NAME',
+        playerId: 'p1',
+        newName: 'Rohit Sharma (Captain)',
+      });
+
+      // Verify name is updated in config
+      expect(testState.config.teamA.players.find(p => p.id === 'p1')?.name).toBe('Rohit Sharma (Captain)');
+
+      // Verify stats are 100% PRESERVED
+      const p1Stat = testState.innings[0].batterStats['p1'];
+      expect(p1Stat.playerName).toBe('Rohit Sharma (Captain)');
+      expect(p1Stat.runs).toBe(30);
+      expect(p1Stat.balls).toBe(6);
+      expect(p1Stat.sixes).toBe(5);
+      expect(p1Stat.fours).toBe(0);
+      expect(p1Stat.isOut).toBe(true);
+
+      // Verify fall of wickets updated
+      expect(testState.innings[0].fallOfWickets[0].batterName).toBe('Rohit Sharma (Captain)');
+
+      // Also edit bowler b1's name from "Bumrah" to "Jasprit Bumrah"
+      testState = applyAction(testState, {
+        type: 'UPDATE_PLAYER_NAME',
+        playerId: 'b1',
+        newName: 'Jasprit Bumrah',
+      });
+
+      const b1Stat = testState.innings[0].bowlerStats['b1'];
+      expect(b1Stat.playerName).toBe('Jasprit Bumrah');
+      expect(b1Stat.runs).toBe(30);
+      expect(b1Stat.wickets).toBe(1);
+    });
+
+    it('preserves player name edit across undo operations', () => {
+      let testState = createTestMatch();
+      testState = applyAction(testState, { type: 'NORMAL_DELIVERY', runs: 2 });
+
+      // Correct player name spelling
+      testState = applyAction(testState, {
+        type: 'UPDATE_PLAYER_NAME',
+        playerId: 'p1',
+        newName: 'Ro-Hitman',
+      });
+      expect(testState.innings[0].batterStats['p1'].playerName).toBe('Ro-Hitman');
+
+      // Score another delivery
+      testState = applyAction(testState, { type: 'NORMAL_DELIVERY', runs: 4 });
+      expect(testState.innings[0].totalRuns).toBe(6);
+
+      // Undo the last delivery
+      testState = applyAction(testState, { type: 'UNDO' });
+      expect(testState.innings[0].totalRuns).toBe(2);
+
+      // Crucial: The name correction is NOT undone!
+      expect(testState.innings[0].batterStats['p1'].playerName).toBe('Ro-Hitman');
+      expect(testState.config.teamA.players.find(p => p.id === 'p1')?.name).toBe('Ro-Hitman');
+    });
+  });
+
+  // ============================================================
+  // 17. Non-Striker Run Out Attribution
+  // ============================================================
+  describe('17. Run Out Attribution Rules', () => {
+    it('credits balls faced and completed runs to the striker when non-striker is run out', () => {
+      let testState = createTestMatch();
+      // Striker p1 faces the ball, completed 1 run, non-striker p2 is run out
+      const dismissal: DismissalInfo = {
+        type: 'run_out',
+        dismissedBatterId: 'p2', // Non-striker out!
+        crossingOccurred: false,
+        bowlerCredited: false,
+      };
+
+      testState = applyAction(testState, { type: 'WICKET', dismissal, runs: 1 });
+
+      const inn = testState.innings[0];
+      // Striker p1 faced the ball and completed 1 run
+      expect(inn.batterStats['p1'].balls).toBe(1);
+      expect(inn.batterStats['p1'].runs).toBe(1);
+      expect(inn.batterStats['p1'].isOut).toBe(false);
+
+      // Non-striker p2 was dismissed, faced 0 balls!
+      expect(inn.batterStats['p2'].balls).toBe(0);
+      expect(inn.batterStats['p2'].runs).toBe(0);
+      expect(inn.batterStats['p2'].isOut).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // 18. All-Out Condition for 11 Players
+  // ============================================================
+  describe('18. 11-Player All Out Rule', () => {
+    it('ends innings automatically on the 10th wicket and does not request an 11th replacement', () => {
+      const fullSquadConfig: MatchConfig = {
+        ...sampleConfig,
+        format: { oversPerInnings: 20, maxOversPerBowler: 4, playersPerSide: 11 },
+        teamA: {
+          id: 'team-a',
+          name: 'Warriors',
+          players: Array.from({ length: 11 }, (_, i) => ({
+            id: `player-${i + 1}`,
+            name: `Player ${i + 1}`,
+            isCaptain: i === 0,
+            isWicketkeeper: i === 1,
+          })),
+        },
+      };
+
+      let matchState = createInitialMatchState(fullSquadConfig, 'player-1', 'player-2', 'b1');
+
+      // Dismiss 9 wickets successively, bringing in players 3 through 11
+      for (let w = 0; w < 9; w++) {
+        const outId = matchState.innings[0].currentStrikerId;
+        matchState = applyAction(matchState, {
+          type: 'WICKET',
+          dismissal: { type: 'bowled', dismissedBatterId: outId, bowlerCredited: true },
+          runs: 0,
+        });
+        matchState = applyAction(matchState, {
+          type: 'ADD_BATTER',
+          batterId: `player-${w + 3}`,
+        });
+      }
+
+      expect(matchState.innings[0].wickets).toBe(9);
+      expect(matchState.status).toBe('live');
+
+      // 10th wicket falls: All out!
+      const lastOutId = matchState.innings[0].currentStrikerId;
+      matchState = applyAction(matchState, {
+        type: 'WICKET',
+        dismissal: { type: 'bowled', dismissedBatterId: lastOutId, bowlerCredited: true },
+        runs: 0,
+      });
+
+      expect(matchState.innings[0].wickets).toBe(10);
+      expect(matchState.innings[0].status).toBe('completed');
+      expect(matchState.status).toBe('innings_break'); // Transitioned to innings break, no new batter requested!
+    });
+  });
 });

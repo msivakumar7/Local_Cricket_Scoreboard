@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Download, TrendingUp } from 'lucide-react';
+import { ChevronLeft, Download, TrendingUp, Edit2 } from 'lucide-react';
 import { matchRepository } from '../db/repository';
 import type { MatchState, InningsState, BatterStats, BowlerStats, DeliveryEvent } from '../domain/types';
 import { legalBallsToOverString, calculateCRR } from '../domain/rules';
-import { recalculateInnings } from '../domain/engine';
-import { Button, Card, TabStrip, Badge } from '../components/common/index';
+import { recalculateInnings, updatePlayerName } from '../domain/engine';
+import { Button, Card, TabStrip, Badge, Modal } from '../components/common/index';
 import { generateMatchPDF } from '../services/pdfService';
 import { useMatch } from '../hooks/useMatch';
 import EditDeliveryDialog from '../components/scorecard/EditDeliveryDialog';
@@ -17,6 +17,10 @@ export default function Scorecard() {
   const [state, setState] = useState<MatchState | null>(null);
   const [activeInnings, setActiveInnings] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // Player name editing state
+  const [editPlayerId, setEditPlayerId] = useState<string | null>(null);
+  const [editPlayerName, setEditPlayerName] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -66,6 +70,21 @@ export default function Scorecard() {
     }
   }
 
+  async function handleUpdatePlayerName(playerId: string, newName: string) {
+    if (!state) return;
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    if (liveState && liveState.config.id === state.config.id) {
+      dispatch({ type: 'UPDATE_PLAYER_NAME', playerId, newName: trimmed });
+    } else {
+      const updatedState = updatePlayerName(state, playerId, trimmed);
+      await matchRepository.save(updatedState);
+      setState(updatedState);
+    }
+    setEditPlayerId(null);
+  }
+
   if (loading) return <div className="min-h-screen bg-[#F5F9FF] flex items-center justify-center"><p className="text-[#60758A]">Loading scorecard…</p></div>;
   if (!state) return (
     <div className="min-h-screen bg-[#F5F9FF] flex items-center justify-center flex-col gap-4">
@@ -104,6 +123,11 @@ export default function Scorecard() {
             >
               <ChevronLeft size={22} className="text-[#60758A]" />
             </button>
+            <img
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt="Logo"
+              className="w-8 h-8 object-contain rounded-lg drop-shadow-sm flex-shrink-0 mr-1"
+            />
             <div>
               <h1 className="text-base font-bold text-[#172B4D]">Scorecard</h1>
               <p className="text-xs text-[#60758A]">{config.title}</p>
@@ -165,6 +189,10 @@ export default function Scorecard() {
             getTeamName={getTeamName}
             getPlayerName={getPlayerName}
             onEditDelivery={handleEditDelivery}
+            onEditPlayer={(pId, currentName) => {
+              setEditPlayerId(pId);
+              setEditPlayerName(currentName);
+            }}
           />
         )}
 
@@ -174,18 +202,65 @@ export default function Scorecard() {
           </Card>
         )}
       </div>
+
+      {/* Edit Player Name Modal */}
+      {editPlayerId && (
+        <Modal
+          isOpen={true}
+          onClose={() => setEditPlayerId(null)}
+          title="Edit Player Name"
+          size="sm"
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-[#60758A]">
+              Update player name across the scorecard, batting records, bowling records, and falls of wickets.
+            </p>
+            <div>
+              <label className="text-xs font-bold text-[#172B4D] uppercase tracking-wider block mb-1">
+                Player Name
+              </label>
+              <input
+                type="text"
+                value={editPlayerName}
+                onChange={e => setEditPlayerName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    handleUpdatePlayerName(editPlayerId, editPlayerName);
+                  }
+                }}
+                className="input-field"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setEditPlayerId(null)} fullWidth>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => handleUpdatePlayerName(editPlayerId, editPlayerName)}
+                disabled={!editPlayerName.trim()}
+                fullWidth
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
 function InningsScorecard({
-  innings, config, getTeamName, getPlayerName, onEditDelivery,
+  innings, config, getTeamName, getPlayerName, onEditDelivery, onEditPlayer,
 }: {
   innings: InningsState;
   config: any;
   getTeamName: (id: string) => string;
   getPlayerName: (teamId: string, playerId: string) => string;
   onEditDelivery: (deliveryId: string, updated: Partial<DeliveryEvent>) => void;
+  onEditPlayer: (playerId: string, currentName: string) => void;
 }) {
   const crr = calculateCRR(innings.totalRuns, innings.legalBalls);
 
@@ -241,8 +316,9 @@ function InningsScorecard({
 
       {/* Batting scorecard */}
       <Card className="overflow-hidden">
-        <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5]">
+        <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5] flex justify-between items-center">
           <p className="text-xs font-extrabold text-[#60758A] uppercase tracking-widest">Batting</p>
+          <span className="text-[10px] text-[#1565C0] font-semibold">Tap ✎ to edit names</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[500px]">
@@ -261,9 +337,17 @@ function InningsScorecard({
               {batters.map((b, idx) => (
                 <tr key={b.playerId} className={`border-b border-[#DCE7F5] last:border-0 ${b.playerId === innings.currentStrikerId ? 'bg-[#E3F2FD]/50' : idx % 2 === 0 ? 'bg-white' : 'bg-[#F5F9FF]/50'}`}>
                   <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       {b.playerId === innings.currentStrikerId && <span className="text-[#1565C0] text-xs" aria-label="Current striker">★</span>}
-                      <span className="text-sm font-semibold text-[#172B4D] truncate max-w-[130px]">{getBatterName(b.playerId)}</span>
+                      <span className="text-sm font-semibold text-[#172B4D] truncate max-w-[120px]">{getBatterName(b.playerId)}</span>
+                      <button
+                        type="button"
+                        onClick={() => onEditPlayer(b.playerId, getBatterName(b.playerId))}
+                        className="p-1 text-[#60758A] hover:text-[#1565C0] rounded"
+                        title="Edit name"
+                      >
+                        <Edit2 size={12} />
+                      </button>
                     </div>
                   </td>
                   <td className="px-2 py-2.5 text-xs text-[#60758A] max-w-[150px]">
@@ -344,8 +428,9 @@ function InningsScorecard({
 
       {/* Bowling scorecard */}
       <Card className="overflow-hidden">
-        <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5]">
+        <div className="px-4 py-2.5 bg-[#F5F9FF] border-b border-[#DCE7F5] flex justify-between items-center">
           <p className="text-xs font-extrabold text-[#60758A] uppercase tracking-widest">Bowling</p>
+          <span className="text-[10px] text-[#1565C0] font-semibold">Tap ✎ to edit names</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[400px]">
@@ -362,7 +447,19 @@ function InningsScorecard({
             <tbody>
               {bowlers.map((b, idx) => (
                 <tr key={b.playerId} className={`border-b border-[#DCE7F5] last:border-0 ${idx % 2 === 0 ? 'bg-white' : 'bg-[#F5F9FF]/50'}`}>
-                  <td className="px-4 py-2.5 text-sm font-semibold text-[#172B4D] truncate max-w-[130px]">{getBowlerName(b.playerId)}</td>
+                  <td className="px-4 py-2.5 text-sm font-semibold text-[#172B4D] truncate max-w-[130px]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate">{getBowlerName(b.playerId)}</span>
+                      <button
+                        type="button"
+                        onClick={() => onEditPlayer(b.playerId, getBowlerName(b.playerId))}
+                        className="p-1 text-[#60758A] hover:text-[#1565C0] rounded"
+                        title="Edit name"
+                      >
+                        <Edit2 size={12} />
+                      </button>
+                    </div>
+                  </td>
                   <td className="px-2 py-2.5 text-right text-sm tabular-nums">{legalBallsToOverString(b.legalBalls)}</td>
                   <td className="px-2 py-2.5 text-right text-sm tabular-nums text-[#60758A]">{b.maidens}</td>
                   <td className="px-2 py-2.5 text-right text-sm tabular-nums text-[#60758A]">{b.runs}</td>

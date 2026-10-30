@@ -88,9 +88,11 @@ export default function Home() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#1565C0] flex items-center justify-center shadow-md">
-            <span className="text-white font-extrabold text-sm">LC</span>
-          </div>
+          <img
+            src={`${import.meta.env.BASE_URL}logo.png`}
+            alt="LocalCricket Logo"
+            className="w-12 h-12 object-contain rounded-xl drop-shadow-md"
+          />
           <div>
             <h1 className="text-2xl font-extrabold text-[#172B4D]">LocalCricket</h1>
             <p className="text-xs text-[#60758A]">Offline scoring app</p>

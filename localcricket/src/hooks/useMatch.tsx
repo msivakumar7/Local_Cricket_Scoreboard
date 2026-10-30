@@ -3,7 +3,7 @@
 // ============================================================
 
 import React, {
-  createContext, useContext, useReducer, useCallback, useEffect, useState,
+  createContext, useContext, useReducer, useCallback, useEffect, useState, useRef,
 } from 'react';
 import type { MatchState, ScoringAction, MatchConfig } from '../domain/types';
 import { applyAction, createInitialMatchState, addNewBatter } from '../domain/engine';
@@ -11,13 +11,14 @@ import { matchRepository } from '../db/repository';
 
 type InternalAction =
   | ScoringAction
-  | { type: '_LOAD_STATE'; payload: MatchState }
-  | { type: '_ADD_BATTER'; batterId: string };
+  | { type: '_LOAD_STATE'; payload: MatchState };
 
 interface MatchContextValue {
   state: MatchState | null;
   dispatch: (action: ScoringAction) => void;
-  addBatter: (batterId: string) => void;
+  addBatter: (batterId: string, newPlayerName?: string) => void;
+  updatePlayerName: (playerId: string, newName: string) => void;
+  addBowler: (bowlerId: string, bowlerName: string) => void;
   initMatch: (
     config: MatchConfig,
     openingStrikerId: string,
@@ -32,10 +33,6 @@ const MatchContext = createContext<MatchContextValue | null>(null);
 
 function reducer(state: MatchState | null, action: InternalAction): MatchState | null {
   if (action.type === '_LOAD_STATE') return action.payload;
-  if (action.type === '_ADD_BATTER') {
-    if (!state) return state;
-    return addNewBatter(state, action.batterId);
-  }
   if (!state) return state;
   return applyAction(state, action as ScoringAction);
 }
@@ -43,21 +40,22 @@ function reducer(state: MatchState | null, action: InternalAction): MatchState |
 export function MatchProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch_] = useReducer(reducer, null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('idle');
-  const [saveTimer, setSaveTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounced auto-save
   useEffect(() => {
     if (!state) return;
-    if (saveTimer) clearTimeout(saveTimer);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('saving');
-    const timer = setTimeout(() => {
+    saveTimerRef.current = setTimeout(() => {
       matchRepository
         .save(state)
         .then(() => setSaveStatus('saved'))
         .catch(() => setSaveStatus('error'));
     }, 500);
-    setSaveTimer(timer);
-    return () => clearTimeout(timer);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
@@ -65,8 +63,16 @@ export function MatchProvider({ children }: { children: React.ReactNode }) {
     dispatch_(action);
   }, []);
 
-  const addBatter = useCallback((batterId: string) => {
-    dispatch_({ type: '_ADD_BATTER', batterId });
+  const addBatter = useCallback((batterId: string, newPlayerName?: string) => {
+    dispatch_({ type: 'ADD_BATTER', batterId, newPlayerName });
+  }, []);
+
+  const updatePlayerName = useCallback((playerId: string, newName: string) => {
+    dispatch_({ type: 'UPDATE_PLAYER_NAME', playerId, newName });
+  }, []);
+
+  const addBowler = useCallback((bowlerId: string, bowlerName: string) => {
+    dispatch_({ type: 'ADD_BOWLER', bowlerId, bowlerName });
   }, []);
 
   const initMatch = useCallback((
@@ -89,7 +95,7 @@ export function MatchProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <MatchContext.Provider value={{ state, dispatch, addBatter, initMatch, loadMatch, saveStatus }}>
+    <MatchContext.Provider value={{ state, dispatch, addBatter, updatePlayerName, addBowler, initMatch, loadMatch, saveStatus }}>
       {children}
     </MatchContext.Provider>
   );

@@ -2,7 +2,7 @@
 // LocalCricket — Cricket Rules
 // ============================================================
 
-import type { DismissalType, DeliveryType } from './types';
+import type { DismissalType, DeliveryType, InningsState, MatchFormat } from './types';
 
 /** Dismissals valid for each delivery type */
 export const VALID_DISMISSALS_ON_DELIVERY: Record<DeliveryType, DismissalType[]> = {
@@ -86,6 +86,43 @@ export function getDismissalText(
     default:
       return type;
   }
+}
+
+/** Calculate maximum overs permitted per bowler based on format */
+export function getMaxOversPerBowler(format: MatchFormat): number {
+  if (format.maxOversPerBowler && format.maxOversPerBowler > 0) {
+    return format.maxOversPerBowler;
+  }
+  return Math.max(1, Math.ceil(format.oversPerInnings / 5));
+}
+
+/**
+ * Check if the innings is currently awaiting a new bowler for the upcoming over.
+ * Returns true if an over has just completed (6 legal balls), the innings is still active,
+ * not all-out, innings overs limit not reached, and the bowler for the next over has not
+ * yet been confirmed (currentBowlerId is still the bowler of the previous over).
+ */
+export function isAwaitingNextBowler(
+  innings: InningsState,
+  oversPerInnings: number,
+  isAllOut: boolean = false
+): boolean {
+  if (innings.status !== 'active' || isAllOut) return false;
+  if (innings.legalBalls === 0 || innings.legalBalls % 6 !== 0) return false;
+  if (innings.legalBalls >= oversPerInnings * 6) return false;
+
+  const completedOverIndex = Math.floor(innings.legalBalls / 6) - 1;
+  const prevOverDeliveries = innings.deliveries.filter(d => d.overNumber === completedOverIndex);
+  const lastOverBowlerId = prevOverDeliveries.length > 0 ? prevOverDeliveries[prevOverDeliveries.length - 1].bowlerId : null;
+
+  const nextOverIndex = completedOverIndex + 1;
+  const nextOverDeliveries = innings.deliveries.filter(d => d.overNumber === nextOverIndex);
+
+  // If new over deliveries already exist, we are not awaiting a bowler
+  if (nextOverDeliveries.length > 0) return false;
+
+  // If current bowler is still the bowler of the last over, a new bowler must be chosen
+  return lastOverBowlerId !== null && innings.currentBowlerId === lastOverBowlerId;
 }
 
 /** Check bowling quota */

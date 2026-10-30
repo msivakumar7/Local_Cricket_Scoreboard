@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
-import type { MatchConfig, Team, Player, MatchFormat } from '../../domain/types';
+import { ChevronLeft, ChevronRight, Check, Zap, ListOrdered, Edit2, Trash2 } from 'lucide-react';
+import type { MatchConfig, Team, Player, MatchFormat, PlayerEntryMode } from '../../domain/types';
 import { useMatch } from '../../hooks/useMatch';
 import { Button, Card } from '../../components/common/index';
 
@@ -19,6 +19,7 @@ export default function NewMatch() {
   const [currentStep, setCurrentStep] = useState<WizardStep>('details');
 
   // Wizard state
+  const [entryMode, setEntryMode] = useState<PlayerEntryMode>('dynamic');
   const [title, setTitle] = useState('');
   const [venue, setVenue] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -57,18 +58,37 @@ export default function NewMatch() {
       if (actualOvers < 1 || actualOvers > 100) errs.overs = 'Overs must be 1–100';
       if (playersPerSide < 2 || playersPerSide > 11) errs.players = 'Players must be 2–11';
     }
+
     if (currentStep === 'players') {
-      if (teamAPlayers.length < 2) errs.teamAPlayers = `Add at least 2 players for ${teamAName || 'Team A'}`;
-      if (teamBPlayers.length < 2) errs.teamBPlayers = `Add at least 2 players for ${teamBName || 'Team B'}`;
+      if (entryMode === 'dynamic') {
+        // Dynamic mode only requires at least 2 players for team A and at least 1 for team B (or vice versa)
+        if (teamAPlayers.length < 2) {
+          errs.teamAPlayers = `Enter at least 2 opening players for ${teamAName || 'Team A'}`;
+        }
+        if (teamBPlayers.length < 1) {
+          errs.teamBPlayers = `Enter at least 1 opening bowler/player for ${teamBName || 'Team B'}`;
+        }
+      } else {
+        // Pre-enter mode: requires team squads
+        if (teamAPlayers.length < 2) {
+          errs.teamAPlayers = `Add at least 2 players for ${teamAName || 'Team A'} (up to ${playersPerSide})`;
+        }
+        if (teamBPlayers.length < 2) {
+          errs.teamBPlayers = `Add at least 2 players for ${teamBName || 'Team B'} (up to ${playersPerSide})`;
+        }
+      }
     }
+
     if (currentStep === 'toss') {
       if (!tossWinnerId) errs.toss = 'Select toss winner';
     }
+
     if (currentStep === 'openers') {
       const batTeamId = tossDecision === 'bat' ? tossWinnerId : (tossWinnerId === teamAId ? teamBId : teamAId);
       const bowlTeamId = batTeamId === teamAId ? teamBId : teamAId;
       const battingP = batTeamId === teamAId ? teamAPlayers : teamBPlayers;
       const bowlingP = bowlTeamId === teamAId ? teamAPlayers : teamBPlayers;
+
       if (!strikerId) errs.striker = 'Select opening striker';
       if (!nonStrikerId) errs.nonStriker = 'Select opening non-striker';
       if (strikerId && nonStrikerId && strikerId === nonStrikerId) errs.nonStriker = 'Must be different batters';
@@ -76,6 +96,7 @@ export default function NewMatch() {
       if (strikerId && !battingP.find(p => p.id === strikerId)) errs.striker = 'Invalid selection';
       if (bowlerId && !bowlingP.find(p => p.id === bowlerId)) errs.bowler = 'Invalid selection';
     }
+
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -107,6 +128,7 @@ export default function NewMatch() {
       venue: venue.trim(),
       date,
       format,
+      entryMode,
       teamA,
       teamB,
       tossWinnerId,
@@ -158,7 +180,17 @@ export default function NewMatch() {
             >
               <ChevronLeft size={22} />
             </button>
-            <h1 className="text-lg font-bold text-[#172B4D]">New Match Wizard</h1>
+            <img
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt="Logo"
+              className="w-9 h-9 object-contain rounded-lg drop-shadow-sm flex-shrink-0"
+            />
+            <div>
+              <h1 className="text-lg font-bold text-[#172B4D]">New Match Wizard</h1>
+              <span className="text-[11px] text-[#1565C0] font-semibold">
+                {entryMode === 'dynamic' ? '⚡ Dynamic Entry Mode' : '📋 Pre-enter Squad Mode'}
+              </span>
+            </div>
           </div>
           {/* Progress */}
           <div className="flex items-center gap-1">
@@ -194,6 +226,54 @@ export default function NewMatch() {
         {currentStep === 'details' && (
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-[#172B4D]">Match Details</h2>
+
+            {/* PLAYER ENTRY MODE SELECTION */}
+            <div>
+              <label className="block text-sm font-bold text-[#172B4D] mb-1.5">
+                Player Entry Mode
+              </label>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEntryMode('dynamic')}
+                  className={`p-3.5 rounded-xl border-2 text-left transition-all min-h-[80px] ${
+                    entryMode === 'dynamic'
+                      ? 'border-[#1565C0] bg-[#E3F2FD] shadow-xs'
+                      : 'border-[#DCE7F5] bg-white hover:border-[#1565C0]'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Zap size={16} className="text-[#1565C0]" />
+                    <span className="font-bold text-sm text-[#172B4D]">Dynamic Entry</span>
+                    <span className="text-[10px] bg-green-100 text-green-800 font-bold px-1.5 py-0.2 rounded ml-auto">
+                      Default
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#60758A] leading-tight">
+                    Enter only 2 opening batters now. Add new batters as wickets fall.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setEntryMode('pre_enter')}
+                  className={`p-3.5 rounded-xl border-2 text-left transition-all min-h-[80px] ${
+                    entryMode === 'pre_enter'
+                      ? 'border-[#1565C0] bg-[#E3F2FD] shadow-xs'
+                      : 'border-[#DCE7F5] bg-white hover:border-[#1565C0]'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <ListOrdered size={16} className="text-[#1565C0]" />
+                    <span className="font-bold text-sm text-[#172B4D]">Pre-enter Squad</span>
+                  </div>
+                  <p className="text-[11px] text-[#60758A] leading-tight">
+                    Enter all 11 player names before starting the match.
+                  </p>
+                </button>
+              </div>
+            </div>
+
             <Field label="Match Title (optional)">
               <input
                 value={title} onChange={e => setTitle(e.target.value)}
@@ -267,28 +347,50 @@ export default function NewMatch() {
         {/* STEP 2: Players */}
         {currentStep === 'players' && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-[#172B4D]">Add Players</h2>
-              <button
-                type="button"
-                onClick={fillDemoSquads}
-                className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#E3F2FD] text-[#1565C0] hover:bg-[#BBDEFB] transition-colors min-h-[36px]"
-              >
-                ⚡ Auto-fill Demo Squads
-              </button>
-            </div>
+            {entryMode === 'dynamic' ? (
+              <div className="bg-[#E3F2FD] border border-[#1565C0]/30 rounded-xl p-3.5">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap size={16} className="text-[#1565C0]" />
+                  <p className="text-xs font-bold text-[#1565C0] uppercase tracking-wider">
+                    Dynamic Entry Mode Active
+                  </p>
+                </div>
+                <p className="text-xs text-[#172B4D] leading-relaxed">
+                  Only enter opening players now (minimum 2 for {teamAName || 'Team A'}, and 1 for {teamBName || 'Team B'}).
+                  As wickets fall, you can enter new batter names progressively up to {playersPerSide} players!
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-[#172B4D]">Pre-enter All Players</h2>
+                  <p className="text-xs text-[#60758A]">Enter full rosters for both teams (up to {playersPerSide} each)</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fillDemoSquads}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#E3F2FD] text-[#1565C0] hover:bg-[#BBDEFB] transition-colors min-h-[36px]"
+                >
+                  ⚡ Auto-fill
+                </button>
+              </div>
+            )}
+
             <PlayerEntry
               teamName={teamAName || 'Team A'}
               players={teamAPlayers}
               onChange={setTeamAPlayers}
               targetCount={playersPerSide}
+              isDynamic={entryMode === 'dynamic'}
               error={errors.teamAPlayers}
             />
+
             <PlayerEntry
               teamName={teamBName || 'Team B'}
               players={teamBPlayers}
               onChange={setTeamBPlayers}
               targetCount={playersPerSide}
+              isDynamic={entryMode === 'dynamic'}
               error={errors.teamBPlayers}
             />
           </div>
@@ -360,6 +462,8 @@ export default function NewMatch() {
             <p className="text-sm text-[#60758A]">
               <strong>{battingTeamId === teamAId ? teamAName : teamBName}</strong> is batting first.
             </p>
+
+            {/* Opening Striker */}
             <div>
               <label className="block text-sm font-bold text-[#172B4D] mb-2">
                 Opening Striker <span className="text-xs font-normal text-[#60758A]">(faces first ball)</span>
@@ -387,6 +491,8 @@ export default function NewMatch() {
                 ))}
               </div>
             </div>
+
+            {/* Opening Non-Striker */}
             <div>
               <label className="block text-sm font-bold text-[#172B4D] mb-2">Opening Non-striker</label>
               {errors.nonStriker && <p className="text-red-600 text-sm mb-1">{errors.nonStriker}</p>}
@@ -409,6 +515,8 @@ export default function NewMatch() {
                 ))}
               </div>
             </div>
+
+            {/* Opening Bowler */}
             <div>
               <label className="block text-sm font-bold text-[#172B4D] mb-2">Opening Bowler</label>
               {errors.bowler && <p className="text-red-600 text-sm mb-1">{errors.bowler}</p>}
@@ -440,6 +548,7 @@ export default function NewMatch() {
             <h2 className="text-xl font-bold text-[#172B4D]">Confirm & Start Match</h2>
             <Card className="p-4 space-y-2">
               <Row label="Match" value={title || `${teamAName} vs ${teamBName}`} />
+              <Row label="Player Entry Mode" value={entryMode === 'dynamic' ? '⚡ Dynamic Entry' : '📋 Pre-enter Squad'} />
               <Row label="Date" value={new Date(date).toLocaleDateString('en-IN', { dateStyle: 'long' })} />
               {venue && <Row label="Venue" value={venue} />}
               <Row label="Format" value={`${actualOvers} overs per side`} />
@@ -459,9 +568,13 @@ export default function NewMatch() {
               <Row label="Bowler" value={bowlingPlayers.find(p => p.id === bowlerId)?.name ?? '—'} />
             </Card>
             <Card className="p-4">
-              <p className="text-xs font-bold text-[#60758A] uppercase tracking-widest mb-2">{teamAName} ({teamAPlayers.length})</p>
+              <p className="text-xs font-bold text-[#60758A] uppercase tracking-widest mb-2">
+                {teamAName} ({teamAPlayers.length} players)
+              </p>
               <p className="text-sm text-[#172B4D]">{teamAPlayers.map(p => p.name).join(', ')}</p>
-              <p className="text-xs font-bold text-[#60758A] uppercase tracking-widest mb-2 mt-3">{teamBName} ({teamBPlayers.length})</p>
+              <p className="text-xs font-bold text-[#60758A] uppercase tracking-widest mb-2 mt-3">
+                {teamBName} ({teamBPlayers.length} players)
+              </p>
               <p className="text-sm text-[#172B4D]">{teamBPlayers.map(p => p.name).join(', ')}</p>
             </Card>
           </div>
@@ -519,10 +632,11 @@ interface PlayerEntryProps {
   players: Player[];
   onChange: (players: Player[]) => void;
   targetCount: number;
+  isDynamic: boolean;
   error?: string;
 }
 
-function PlayerEntry({ teamName, players, onChange, targetCount, error }: PlayerEntryProps) {
+function PlayerEntry({ teamName, players, onChange, targetCount, isDynamic, error }: PlayerEntryProps) {
   const [newName, setNewName] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -557,11 +671,18 @@ function PlayerEntry({ teamName, players, onChange, targetCount, error }: Player
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <h3 className="font-bold text-[#172B4D]">{teamName || 'Team'}</h3>
+        <div>
+          <h3 className="font-bold text-[#172B4D]">{teamName || 'Team'}</h3>
+          {isDynamic && (
+            <p className="text-[11px] text-[#60758A]">
+              {players.length < 2 ? 'Enter at least 2 opening players' : 'Ready! More batters can be added during match'}
+            </p>
+          )}
+        </div>
         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full
-          ${players.length >= targetCount ? 'bg-green-100 text-green-700' :
-            players.length >= 2 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-          {players.length}/{targetCount}
+          ${players.length >= (isDynamic ? 2 : targetCount) ? 'bg-green-100 text-green-700' :
+            players.length >= 1 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+          {players.length} {isDynamic ? 'entered' : `/${targetCount}`}
         </span>
       </div>
       {error && <p className="text-red-600 text-xs mb-2">{error}</p>}
@@ -574,7 +695,7 @@ function PlayerEntry({ teamName, players, onChange, targetCount, error }: Player
             {editId === p.id ? (
               <>
                 <input
-                  className="flex-1 text-sm border border-[#DCE7F5] rounded px-2 py-1 min-h-[36px] focus:border-[#1565C0] outline-none"
+                  className="flex-1 text-sm border border-[#1565C0] rounded px-2 py-1 min-h-[36px] outline-none"
                   value={editName}
                   onChange={e => setEditName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && saveEdit(p.id)}
@@ -591,9 +712,13 @@ function PlayerEntry({ teamName, players, onChange, targetCount, error }: Player
                 <button type="button" onClick={() => toggleCaptain(p.id)} className="text-[10px] text-[#60758A] hover:text-[#1565C0] px-1 min-h-[36px]" title="Toggle captain">C</button>
                 <button type="button" onClick={() => toggleWK(p.id)} className="text-[10px] text-[#60758A] hover:text-amber-600 px-1 min-h-[36px]" title="Toggle wicketkeeper">WK</button>
                 <button type="button" onClick={() => { setEditId(p.id); setEditName(p.name); }}
-                  className="text-[#60758A] hover:text-[#1565C0] p-1 min-h-[36px]" aria-label="Edit player name">✎</button>
+                  className="text-[#60758A] hover:text-[#1565C0] p-1 min-h-[36px]" aria-label="Edit player name">
+                  <Edit2 size={13} />
+                </button>
                 <button type="button" onClick={() => removePlayer(p.id)}
-                  className="text-red-400 hover:text-red-600 p-1 min-h-[36px]" aria-label="Remove player">✕</button>
+                  className="text-red-400 hover:text-red-600 p-1 min-h-[36px]" aria-label="Remove player">
+                  <Trash2 size={13} />
+                </button>
               </>
             )}
           </div>
@@ -606,8 +731,13 @@ function PlayerEntry({ teamName, players, onChange, targetCount, error }: Player
           <input
             value={newName}
             onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addPlayer()}
-            placeholder={`Add player name`}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addPlayer();
+              }
+            }}
+            placeholder={`Add player name (e.g. ${players.length === 0 ? 'Siva' : players.length === 1 ? 'Kumar' : 'Ravi'})`}
             className="flex-1 input-field"
           />
           <Button variant="secondary" onClick={addPlayer} disabled={!newName.trim()} className="px-4">

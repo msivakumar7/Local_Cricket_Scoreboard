@@ -60,11 +60,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {!hideNav && (
         <aside className="hidden sm:flex fixed left-0 top-0 bottom-0 w-56 bg-white border-r border-[#DCE7F5] flex-col py-6 z-40">
           <div className="px-4 mb-8">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-[#1565C0] flex items-center justify-center">
-                <span className="text-white font-bold text-xs">LC</span>
-              </div>
-              <span className="font-bold text-[#172B4D] text-lg">LocalCricket</span>
+            <div className="flex items-center gap-2.5">
+              <img
+                src={`${import.meta.env.BASE_URL}logo.png`}
+                alt="LocalCricket Logo"
+                className="w-9 h-9 object-contain rounded-lg drop-shadow-sm"
+              />
+              <span className="font-bold text-[#172B4D] text-lg tracking-tight">LocalCricket</span>
             </div>
           </div>
           {navItems.map(({ to, label, icon: Icon }) => {

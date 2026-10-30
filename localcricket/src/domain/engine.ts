@@ -8,7 +8,7 @@ import type {
   MatchState, MatchConfig, InningsState, DeliveryEvent,
   ScoringAction, DismissalInfo, ExtrasBreakdown, BatterStats,
   BowlerStats, FallOfWicket, Partnership, MatchStateSnapshot,
-  MatchResult,
+  MatchResult, Player,
 } from './types';
 import {
   isBowlerCredited, shouldRotateStrike, getDismissalText,
@@ -118,6 +118,9 @@ function makeBowlerStats(id: string, name: string, inningsId: string): BowlerSta
 export function applyAction(state: MatchState, action: ScoringAction): MatchState {
   if (action.type === '_LOAD_STATE') return action.payload;
   if (action.type === 'UNDO') return undoAction(state);
+  if (action.type === 'UPDATE_PLAYER_NAME') {
+    return updatePlayerName(state, action.playerId, action.newName);
+  }
 
   // Snapshot before each action (for undo)
   const snapshot: MatchStateSnapshot = {
@@ -150,6 +153,10 @@ export function applyAction(state: MatchState, action: ScoringAction): MatchStat
       return applyPenalty(stateWithSnapshot, action.runs);
     case 'WICKET':
       return applyWicket(stateWithSnapshot, action.dismissal, action.runs ?? 0);
+    case 'ADD_BATTER':
+      return addNewBatter(stateWithSnapshot, action.batterId, action.newPlayerName);
+    case 'ADD_BOWLER':
+      return addBowler(stateWithSnapshot, action.bowlerId, action.bowlerName);
     case 'CHANGE_BOWLER':
       return applyChangeBowler(stateWithSnapshot, action.bowlerId);
     case 'SWAP_BATTERS':
@@ -247,7 +254,7 @@ function applyWide(
   const event: DeliveryEvent = {
     id: uuidv4(), inningsId: i.id, overNumber, ballInOver: i.legalBalls % 6,
     legalBallSequence: i.legalBalls,
-    deliveryType: 'wide', batterRuns: 0, extras: extrasTotal, totalRuns: extrasTotal,
+    deliveryType: 'wide', batterRuns: 0, completedRuns: additionalRuns, extras: extrasTotal, totalRuns: extrasTotal,
     isLegal: false, isBoundary: additionalRuns === 4,
     boundaryType: additionalRuns === 4 ? 4 : undefined,
     dismissal,
@@ -498,21 +505,23 @@ function applyWicket(state: MatchState, dismissal: DismissalInfo, runs: number):
   i.totalRuns += runs;
   i.legalBalls += 1;
 
-  // Batter stats (for runs before dismissal)
+  // Batter stats: The striker always faces this delivery
+  const strikerId = event.strikerId;
+  ensureBatterStats(i, strikerId, state.config);
+  i.batterStats[strikerId].balls += 1;
+  i.batterStats[strikerId].didBat = true;
   if (runs > 0) {
-    ensureBatterStats(i, dismissal.dismissedBatterId);
-    i.batterStats[dismissal.dismissedBatterId].runs += runs;
-    i.batterStats[dismissal.dismissedBatterId].balls += 1;
-    i.batterStats[dismissal.dismissedBatterId].didBat = true;
-    i.batterStats[dismissal.dismissedBatterId].strikeRate =
-      calculateSR(i.batterStats[dismissal.dismissedBatterId].runs, i.batterStats[dismissal.dismissedBatterId].balls);
-  } else {
-    ensureBatterStats(i, dismissal.dismissedBatterId, state.config);
-    i.batterStats[dismissal.dismissedBatterId].balls += 1;
-    i.batterStats[dismissal.dismissedBatterId].didBat = true;
-    i.batterStats[dismissal.dismissedBatterId].strikeRate =
-      calculateSR(i.batterStats[dismissal.dismissedBatterId].runs, i.batterStats[dismissal.dismissedBatterId].balls);
+    i.batterStats[strikerId].runs += runs;
   }
+  i.batterStats[strikerId].strikeRate =
+    calculateSR(i.batterStats[strikerId].runs, i.batterStats[strikerId].balls);
+
+  // Ensure dismissed batter is marked didBat
+  ensureBatterStats(i, dismissal.dismissedBatterId, state.config);
+  i.batterStats[dismissal.dismissedBatterId].didBat = true;
+
+  // Partnership update before wicket closes it
+  updatePartnership(i, runs, true);
 
   // Bowler stats
   ensureBowlerStats(i, i.currentBowlerId, state.config);
@@ -860,17 +869,45 @@ function calculateMatchResult(config: MatchConfig, innings: InningsState[]): Mat
 }
 
 // ============================================================
-// New batter entry
+// New batter entry & Player Management
 // ============================================================
 
-export function addNewBatter(state: MatchState, batterId: string): MatchState {
+export function addNewBatter(
+  state: MatchState,
+  batterId: string,
+  newPlayerName?: string
+): MatchState {
   const innings = currentInnings(state);
   let i = deepClone(innings);
+  let config = deepClone(state.config);
+
+  const battingTeamId = i.battingTeamId;
+  const isTeamA = battingTeamId === config.teamA.id;
+  const battingTeam = isTeamA ? config.teamA : config.teamB;
+
+  let player = battingTeam.players.find(p => p.id === batterId);
+  if (!player) {
+    const assignedName = (newPlayerName && newPlayerName.trim())
+      ? newPlayerName.trim()
+      : `Batter ${i.battingOrder.length + 1}`;
+    player = {
+      id: batterId,
+      name: assignedName,
+      isCaptain: false,
+      isWicketkeeper: false,
+    };
+    battingTeam.players.push(player);
+  } else if (newPlayerName && newPlayerName.trim()) {
+    player.name = newPlayerName.trim();
+  }
 
   if (!i.battingOrder.includes(batterId)) {
     i.battingOrder.push(batterId);
   }
-  ensureBatterStats(i, batterId, state.config);
+  ensureBatterStats(i, batterId, config);
+  if (player && i.batterStats[batterId]) {
+    i.batterStats[batterId].playerName = player.name;
+  }
   i.batterStats[batterId].battingPosition = i.battingOrder.indexOf(batterId) + 1;
   i.batterStats[batterId].isRetiredHurt = false;
   i.batterStats[batterId].isOut = false;
@@ -887,11 +924,142 @@ export function addNewBatter(state: MatchState, batterId: string): MatchState {
   const newPartnership: Partnership = {
     batterAId: i.currentStrikerId,
     batterBId: i.currentNonStrikerId,
-    runs: 0, balls: 0, isActive: true, wicketNumber: i.wickets,
+    runs: 0,
+    balls: 0,
+    isActive: true,
+    wicketNumber: i.wickets,
   };
   i.partnerships.push(newPartnership);
 
-  return { ...state, innings: replaceInnings(state, i) };
+  return {
+    ...state,
+    config,
+    innings: replaceInnings(state, i),
+  };
+}
+
+export function addBowler(
+  state: MatchState,
+  bowlerId: string,
+  bowlerName: string
+): MatchState {
+  const innings = currentInnings(state);
+  let i = deepClone(innings);
+  let config = deepClone(state.config);
+
+  const bowlingTeamId = i.bowlingTeamId;
+  const isTeamA = bowlingTeamId === config.teamA.id;
+  const bowlingTeam = isTeamA ? config.teamA : config.teamB;
+
+  let player = bowlingTeam.players.find(p => p.id === bowlerId);
+  if (!player) {
+    player = {
+      id: bowlerId,
+      name: bowlerName.trim(),
+      isCaptain: false,
+      isWicketkeeper: false,
+    };
+    bowlingTeam.players.push(player);
+  } else {
+    player.name = bowlerName.trim();
+  }
+
+  ensureBowlerStats(i, bowlerId, config);
+  if (player && i.bowlerStats[bowlerId]) {
+    i.bowlerStats[bowlerId].playerName = player.name;
+  }
+  i.currentBowlerId = bowlerId;
+
+  return {
+    ...state,
+    config,
+    innings: replaceInnings(state, i),
+  };
+}
+
+export function updatePlayerName(
+  state: MatchState,
+  playerId: string,
+  newName: string
+): MatchState {
+  const trimmed = newName.trim();
+  if (!trimmed) return state;
+
+  const config = deepClone(state.config);
+  let playerFound = false;
+  for (const p of config.teamA.players) {
+    if (p.id === playerId) {
+      p.name = trimmed;
+      playerFound = true;
+      break;
+    }
+  }
+  if (!playerFound) {
+    for (const p of config.teamB.players) {
+      if (p.id === playerId) {
+        p.name = trimmed;
+        playerFound = true;
+        break;
+      }
+    }
+  }
+
+  const updateInningsNames = (inn: InningsState): InningsState => {
+    const updated = deepClone(inn);
+    if (updated.batterStats[playerId]) {
+      updated.batterStats[playerId].playerName = trimmed;
+    }
+    if (updated.bowlerStats[playerId]) {
+      updated.bowlerStats[playerId].playerName = trimmed;
+    }
+    updated.fallOfWickets = updated.fallOfWickets.map(fow => {
+      if (fow.batterId === playerId) {
+        return { ...fow, batterName: trimmed };
+      }
+      return fow;
+    });
+
+    // Update dismissal texts if a bowler or fielder name changed
+    for (const bId of Object.keys(updated.batterStats)) {
+      const bStat = updated.batterStats[bId];
+      if (bStat.dismissal) {
+        if (
+          bStat.dismissal.dismissedBatterId === playerId ||
+          bStat.dismissal.fielderId === playerId
+        ) {
+          const bowlerDelivery = updated.deliveries.find(
+            d => d.dismissal?.dismissedBatterId === bId
+          );
+          const bowlerName = bowlerDelivery
+            ? getPlayerNameById(config, bowlerDelivery.bowlerId)
+            : getPlayerNameById(config, updated.currentBowlerId);
+          const fielderName = bStat.dismissal.fielderId
+            ? getPlayerNameById(config, bStat.dismissal.fielderId)
+            : undefined;
+          bStat.dismissalText = getDismissalText(
+            bStat.dismissal.type,
+            bowlerName,
+            fielderName
+          );
+        }
+      }
+    }
+
+    return updated;
+  };
+
+  const newInnings = state.innings.map(updateInningsNames);
+  const newHistory = state.history.map(snap => ({
+    ...snap,
+    innings: snap.innings.map(updateInningsNames),
+  }));
+
+  return {
+    ...state,
+    config,
+    innings: newInnings,
+    history: newHistory,
+  };
 }
 
 // ============================================================
